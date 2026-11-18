@@ -20,11 +20,15 @@ end
 # for the formula variables (whose missing values become NaN).
 _isna(x) = x === missing || x === nothing || (x isa AbstractFloat && isnan(x))
 
+# The value a level is grouped by: `unique` and `Dict` compare with `isequal`, for which
+# −0.0 and 0.0 differ, while as group labels (e.g. the bins of `round.(z)`) they are equal.
+_levelkey(x) = x isa AbstractFloat && iszero(x) ? zero(x) : x
+
 # Group codes 1:G in sorted order of the levels; 0 marks a missing value.
 function _encode(v::AbstractVector)
-    levels = sort!(unique(x for x in v if !_isna(x)))
+    levels = sort!(unique(_levelkey(x) for x in v if !_isna(x)))
     code = Dict(l => Int32(i) for (i, l) in enumerate(levels))
-    return Int32[_isna(x) ? Int32(0) : code[x] for x in v], length(levels)
+    return Int32[_isna(x) ? Int32(0) : code[_levelkey(x)] for x in v], length(levels)
 end
 
 # Combine several code vectors into one (an interaction such as sector × quarter).

@@ -18,6 +18,9 @@ cv = vcov(Robust(), r); vcov(cv, 3)                  # the matrix at horizon 3
 | `Robust(; ssc)` | heteroskedasticity-robust |
 | `Clustered(dims...; ssc, psd)` | one- or two-way cluster-robust. Dimensions are `:unit`, `:time`, a fixed-effect or declared cluster column, or a tuple of columns for their intersection. Columns other than the unit, the time and the fixed effects must be declared at estimation with `clusters = (:region,)` |
 | `DriscollKraaySE(bw; ssc, timelags)` | Driscoll–Kraay: a Bartlett long-run variance of the per-period score sums, ordered by calendar period |
+| `TLAHR(; refine, weights)` | t-LAHR of Almuzara & Sancibrián: clustered by period on a lag-augmented regression, with the HC2/Imbens–Kolesár refinement ([methods](../methods/tlahr.md)) |
+| `CosineHAR(B)` | equal-weighted cosine (EWC) long-run variance of the per-period score sums, t(``B``) critical values |
+| `Homoskedastic(; ssc)` | classical, ``\hat\sigma^2(\tilde X'\tilde X)^{-1}``: `regress`/`reghdfe` unadjusted, `ivreg2` without options (`ssc = :none`). A compatibility option ([methods](../methods/leads.md)) |
 
 ## Small-sample conventions
 

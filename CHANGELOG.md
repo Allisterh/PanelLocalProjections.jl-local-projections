@@ -1,6 +1,81 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (unreleased): LP-DiD, negative horizons, lead paths
+
+### LP-DiD (Dube, Girardi, Jordà & Taylor 2025)
+- `estimator = LPDiD(…)` with the formula `ldiff(y) ~ firstdiff(D) + fe(time)`: the long
+  difference on the treatment switch, on the newly treated rows and the clean controls of
+  each horizon. Written from the paper; the Stata command `lpdid` (GPL-3) is run only to
+  compare outputs.
+  - Clean controls: absorbing treatment (default), `control = :nevertreated`,
+    `nonabsorbing = L` (effects stabilise within L periods), `oneoff`, `control = :notyet`,
+    `firsttreat`, `untreated_before`.
+  - `reweight = true`: the equally weighted effect on the treated, by a weighted regression
+    or, with covariates or further fixed effects, by regression adjustment (the influence
+    function is the stored score: `Clustered(:unit; ssc = :none)`).
+  - `pmd = k | :max` (pre-mean differencing); `pooled = true`; `sample = :common` is
+    `lpdid`'s `nocomp`.
+  - `averageeffect(r)` (the average of the event-study coefficients weighted by treated
+    rows, with the standard error of its influence function) and `pretrendtest(r)` (joint
+    test of the pre-treatment coefficients), both from the stored score sums by cluster.
+- Reproduces `lpdid` 1.1.0 on two synthetic panels for 47 option sets: event study, pooled
+  estimates, aggregate average and pre-trend test, coefficients to 1e-14 and standard
+  errors to 5e-11.
+- One difference from the command, with a switch: on unbalanced panels `lpdid`'s `rw`
+  counts among a period's controls clean rows whose ΔD is undefined, which the regression
+  drops, so its estimate is not the equally weighted average of the cohorts' comparisons
+  (0.2% on the test panel). `reweight = true` uses the regression rows;
+  `reweight = :lpdid` reproduces the command. A treatment that switches off without
+  `nonabsorbing` is an error (the command keeps it with a regressor of −1).
+
+### General additions
+- Negative horizons, `horizon = -6:12`: the response before the regressors (pre-trends).
+  `ldiff(y)` is zero at h = −1. Not with `cumul` or `LagAugmented`.
+- Leads on the right-hand side: `leads(x, a:b)`, and `leads(x)` for the path
+  x_{t+1}, …, x_{t+h} at horizon h (the response to x_t holding its later values fixed;
+  exogenous in an IV fit).
+- `weights = :w`: observation weights (weighted least squares, as Stata's pweights), with
+  `WithinFE`, `CDOLS` and `LPDiD`.
+- `pooled = true`: one regression of the response averaged over the horizons.
+- `Homoskedastic(; ssc)`: the classical variance (`regress`, `reghdfe` unadjusted; `ivreg2`
+  without options with `ssc = :none`). `firststage` also reports the Cragg–Donald F
+  (`cdF`).
+- With these, the panel LP-IV figures of Ilzetzki (2024, AER) with pre-trends and with the
+  path of future output as controls are reproduced on his replication data (a local test):
+  coefficients, classical standard errors, band degrees of freedom and first-stage F.
+
+### Fixes (review of 2026-11-17)
+- Nested shifts went through the intermediate row: `ldiff(lags(y, 1))` lost the last base
+  period of every unit, and `lags(lags(x, 1), 1)` or `firstdiff(lags(x, 2:2))` were
+  undefined next to a gap. Terms are now evaluated with composed offsets, and the lags
+  that `LagAugmented` adds re-evaluate the column's term. **Estimates change** for
+  formulas with nested shifts (on balanced panels: `ldiff(lags(y, ℓ))`,
+  `leads(lags(y, ℓ))`, `cumul(lags(g, ℓ))`, which gain rows); other formulas are
+  unchanged.
+- A regressor that is constant in a horizon's sample at a level whose mean is not exact
+  (0.1, 0.35, …) escaped the absorbed-column screen and got an arbitrary coefficient with
+  status `:ok` (also inside split-panel halves, and as an instrument). It is now absorbed:
+  an error or `:singular` for a shock, omitted for a control.
+- `TLAHR()`: with two exposures of one aggregate series, the standard error and the
+  Imbens–Kolesár degrees of freedom of one depended on the units of the other (a round-off
+  column of the synthetic design could pass the rank tolerance). Columns that the weights
+  annihilate are now exactly zero.
+- `firststage` with nearly collinear instruments threw a `PosDefException` or returned
+  noise: the statistics are NaN, with the warning, when the instruments' cross-product is
+  numerically singular; the effective F is NaN wherever the Kleibergen–Paap statistic is.
+- A `NaN` or `nothing` id is an error, as a `missing` one (it was a unit of its own); −0.0
+  and 0.0 are one level of an id, fixed-effect or cluster column.
+- `AlternatingProjections` ran `maxiter + 1` sweeps when `maxiter` was even.
+- Documentation: the formula guide described panel LP-IV as planned; the `synthetic`
+  docstring said `x` is NaN at a zero-weight period (it is 0); the non-convergence note no
+  longer suggests loosening `tol`.
+- Reported and left as they are: which column of a collinear set is dropped depends on the
+  order of the formula (the dropped one is named in a note); `ssc = :mss` with a negative
+  factor under a PSD repair returns a finite standard error (as the authors' code); with a
+  very loose `tol` the absorbed-column screen can miss an absorbed regressor.
+
+### Other
+- New pinned Stata packages for the cross-checks: lpdid, listreg, boottest, ereplace.
 - README: a worked example with a figure, the US state panel LP-IV with t-LAHR against
   state-clustered bands, drawn by `examples/us_states/figure.jl` into
   `docs/src/assets/us_states_irf.png` (also on the example page).

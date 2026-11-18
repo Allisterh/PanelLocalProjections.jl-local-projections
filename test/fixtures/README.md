@@ -20,6 +20,8 @@ seeds); `julia --project=dev dev/make_fixtures.jl --check` regenerates them and 
 | `fx_tlahr_unbal.csv` | `fx_tlahr` with ~10% of the rows removed | 20261024 (+11) |
 | `fx_lpiv.csv` | Panel LP-IV after Almuzara–Sancibrián eq. (14): endogenous aggregate `ffr`, proxy `mp` (a₀ = 1, noise 0.5), exposure `s`, control `w`, groups `grp` (3) with dummies `g1`–`g3`, N = 60, T = 50 | 20261025 |
 | `fx_lpiv_unbal.csv` | `fx_lpiv` with staggered entry, period 25 absent, ~8% of the rows removed | 20261025 (+12) |
+| `fx_lpdid.csv` | Difference-in-differences panel, N = 60, T = 30: absorbing staggered treatment `d` (six cohorts and never-treated units; effects growing with exposure and differing by cohort), non-absorbing persistent treatment `d2`, one-off events `d3`, with outcomes `y`, `y2`, `y3` on a common untreated path; covariates `x`, `xb`, weight `w`, groups `reg` (4), `st` (12) | 20261117 |
+| `fx_lpdid_unbal.csv` | `fx_lpdid` with a ragged start, ~4% of the rows removed, missing values in the outcomes (2%), each treatment (1%) and `x` (1%) | 20261117 (+13) |
 
 ## `stata/`, `r/`: reference outputs on the synthetic panels
 
@@ -40,15 +42,18 @@ Added from Phase 1 on. Columns: tool | version/SHA | licence | input | generatin
 | `r/p6b_fixest_la.csv` | R 4.5.3, fixest 0.14.0 (lag-augmented LP-IV) | CRAN | fixest GPL-3 (output only) | `fx_lpiv`, `fx_lpiv_unbal` | `crosscheck/R/p6b_fixest_la.R` |
 | `stata/p6c_firststage.csv` | Stata 19.5 BE: ivreghdfe 1.1.4 (`e(widstat)`), weakivtest (`r(F_eff)`; needs avar, distinct) | ivreghdfe `bfb5577`; SSC (see `crosscheck/VERSIONS.md`) | ivreghdfe MIT; weakivtest, avar, distinct SSC (output only) | `fx_lpiv`, `fx_lpiv_unbal` | `crosscheck/stata/p6c_firststage.do` |
 | `r/p6_fixest.csv` | R 4.5.3, fixest 0.14.0 | CRAN | fixest GPL-3 (output only) | `fx_lpiv`, `fx_lpiv_unbal` | `crosscheck/R/p6_fixest.R` |
+| `stata/p7_lpdid.csv` | Stata 19.5 BE: lpdid 1.1.0 (needs reghdfe 6.14.1, listreg 1.0.3, boottest 4.5.5); one block by reghdfe | SSC (see `crosscheck/VERSIONS.md`) | lpdid GPL-3, listreg and boottest SSC (output only: the command is run, never ported) | `fx_lpdid`, `fx_lpdid_unbal` | `crosscheck/stata/p7_lpdid.do` |
+| `stata/p7_general.csv` | Stata 19.5 BE: reghdfe 6.14.1, ivreg2 4.1.12, ivreghdfe 1.1.4, regress | see `crosscheck/VERSIONS.md` | reghdfe, ivreghdfe MIT; ivreg2 SSC (output only) | `fx_balanced`, `fx_unbalanced`, `fx_lpiv`, `fx_lpiv_unbal`, `fx_lpdid_unbal` | `crosscheck/stata/p7_general.do` |
 | `r/p1p2_mss_lppanel.csv` | R 4.5.3, Mei–Sheng–Shi `LP_panel` (`LP_panel_all.r`) | metricshilab/panel-lp-replication `882b046` | MIT | `fx_balanced`, `fx_unbalanced`, `fx_balanced` units 1–4 | `crosscheck/R/p1p2_mss_lppanel.R` |
 
 ## `local/` (gitignored)
 
-Outputs computed on third-party data (so far the MSS applications). Tests that need them
+Outputs computed on third-party data (the MSS applications; Ilzetzki 2024). Tests that need them
 carry a `:local_*` tag and are skipped when the sentinel data file is absent (see
 `test/runtests.jl`); with the data present, a missing output is a test failure.
 
 | File | Tool | Input | Script |
 |---|---|---|---|
 | `local/mss_apps_R.csv` | Mei–Sheng–Shi `LP_panel` (FE and SPJ), as in their notebook | their four application CSVs | `crosscheck/R/mss_apps_local.R` |
+| `local/ilzetzki_lp.csv` | Stata `ivreg2` with unit and month dummies, as the replication package of Ilzetzki (2024) runs it | the panel built by its `WWII_Planes.do` (`docs/data/ilzetzki/ilzetzki_panel.csv`, local) | `crosscheck/stata/ilzetzki_local.do` |
 | `local/mss_apps_xtlp.csv` | Stata `xtlp …, tfe m(fe \| spj) keepsingletons` (exact two-way fixed effects) | their Romer–Romer CSVs | `crosscheck/stata/mss_apps_local.do` |

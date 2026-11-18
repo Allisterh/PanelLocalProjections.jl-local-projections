@@ -72,6 +72,16 @@ struct LagsTerm{T} <: StatsModels.AbstractTerm
     lags::UnitRange{Int}
 end
 
+"""
+`leads(x, a:b)` on the right-hand side: x_{i,t+ℓ} for each ℓ in the range. `leads(x)`
+without a range (`leads === nothing`) is the path of x between the shock and the response:
+x_{i,t+1}, …, x_{i,t+h} at horizon h, none at h ≤ 0.
+"""
+struct LeadsTerm{T} <: StatsModels.AbstractTerm
+    term::T
+    leads::Union{Nothing, UnitRange{Int}}
+end
+
 "`firstdiff(x)`: x_{i,t} − x_{i,t−1}."
 struct FirstDiffTerm{T} <: StatsModels.AbstractTerm
     term::T
@@ -98,10 +108,14 @@ struct ProductTerm
     terms::Vector{Any}
 end
 
-# Data needed to evaluate terms on the panel.
+# Data needed to evaluate terms on the panel; `shifts` caches the row lookups of `_shift`.
 struct _EvalContext
     pidx::PanelIndex
     columns::Dict{Symbol, Vector{Float64}}
+    shifts::Dict{Int, Vector{Int32}}
+end
+function _EvalContext(pidx::PanelIndex, columns::Dict{Symbol, Vector{Float64}})
+    _EvalContext(pidx, columns, Dict{Int, Vector{Int32}}())
 end
 
 # ---------------------------------------------------------------------------------------
@@ -168,6 +182,94 @@ struct CDOLS <: PanelLPEstimator
     validate::Bool
 end
 CDOLS(; validate::Bool = true) = CDOLS(validate)
+
+"""
+    LPDiD(; control = :clean, nonabsorbing = nothing, firsttreat = false, oneoff = false,
+            untreated_before = false, reweight = false, pmd = nothing)
+
+LP-DiD, the local-projections difference-in-differences estimator of Dube, Girardi, Jordà
+& Taylor (2025): at each horizon h the long difference y_{i,t+h} − y_{i,t−1} is regressed
+on the treatment switch ΔD_it and time effects, on the rows that enter treatment at t
+(ΔD_it = 1) and the *clean controls* of horizon h. The formula is the regression,
+
+    ldiff(y) ~ firstdiff(D) + fe(time)      (+ covariates, lags(y, …), further fe())
+
+with `D` the 0/1 treatment column; negative horizons give the pre-treatment coefficients
+(`horizon = -5:8`; h = −1 is zero by construction). The default is a variance-weighted
+average effect on the treated of the cohorts, with positive weights. `sample = :common`
+in `panellp` keeps the same rows at every horizon (no composition change; `lpdid`'s
+`nocomp`), `pooled = true` gives the pooled estimate over the horizons, and `weights` the
+observation weights. Standard errors: `Clustered(:unit)` (the paper and `lpdid`).
+
+Clean controls:
+- absorbing treatment (the default): rows with D_{i,t+h} = 0 (D_it = 0 at h < 0), the
+  not-yet-treated and the never-treated. A treatment that switches off is an error.
+- `nonabsorbing = L`: treatment can switch on and off, and its effects are assumed to
+  stabilise within L periods (DGJT Section 4.2.3). Rows with ΔD_it ∈ {0, 1}, no switch in
+  the L periods before t and none in t + 1, …, t + h (at h < 0: the same from t − |h| + 1
+  to t). `oneoff = true` is a treatment that lasts one period by construction (D_it = 1 is
+  an event): events in place of switches.
+- `control = :nevertreated` keeps as controls only units never treated in the data;
+  `control = :notyet` (non-absorbing) only units untreated from their first row through
+  t + h.
+- `firsttreat = true` (non-absorbing) keeps a unit's rows up to its first treatment spell
+  (at most one switch, or one event, through t + h). With `control = :notyet` or
+  `:nevertreated` it is the estimator of the effect of entering treatment for the first
+  time (DGJT Section 4.2.2), which needs no stabilisation window: `nonabsorbing = true`.
+- `untreated_before = true` (non-absorbing) takes a unit as untreated before its first
+  row; by default a row whose window reaches before it is left out.
+
+Estimands and outcomes:
+- `reweight = true`: the equally weighted average effect on the treated (Section 3.3).
+  With no covariates and no fixed effects besides time it is a weighted regression (each
+  period's rows weighted by 1/(1 − p_t), p_t its share of treated rows); otherwise it is
+  regression adjustment (Section 4.1.1): the outcome model is fitted on the clean
+  controls, and the estimate is the mean over the treated rows of the outcome less its
+  prediction. A regression-adjustment fit reports the treatment coefficient only, and its
+  scores are its influence function: use `Clustered(:unit; ssc = :none)`.
+  `reweight = :lpdid` counts the controls of the weighted regression as `lpdid` 1.1.0 does
+  (also clean rows whose ΔD is undefined, which are not in the regression).
+- `pmd = k` or `:max`: the pre-mean-differenced version (Section 3.4), with the mean of
+  y over t − k, …, t − 1 (all required), or over every earlier row of the unit, as the
+  base period instead of y_{i,t−1}. With a non-absorbing treatment the base window must
+  also be free of switches (events).
+
+See [`averageeffect`](@ref) and [`pretrendtest`](@ref).
+"""
+struct LPDiD <: PanelLPEstimator
+    control::Symbol
+    nonabsorbing::Union{Nothing, Int}   # L; −1 for `true` (no stabilisation window)
+    firsttreat::Bool
+    oneoff::Bool
+    untreated_before::Bool
+    reweight::Symbol                    # :none, :equal, :lpdid
+    pmd::Int                            # 0: none; k; −1 for :max
+end
+
+# LPDiD resolved for one call (lpdid.jl): treatment histories over the data rows.
+struct _DiD <: PanelLPEstimator
+    spec::LPDiD
+    horizons::UnitRange{Int}
+    D::Vector{Float64}          # treatment (NaN where missing)
+    dD::Vector{Float64}         # its switch, D_t − D_{t−1}
+    never::BitVector            # the unit is never treated
+    P::Vector{Float64}          # switches of the unit up to t
+    E0::BitVector               # the unit is untreated at its first row
+    Q::Vector{Float64}          # events (one-off) or switches up to t
+    C0::BitVector               # base flag of the non-absorbing rules
+    y::Vector{Float64}          # outcome
+    base::Vector{Float64}       # base period of the long difference
+    common::Bool                # `sample = :common`: the same rows at every horizon
+end
+
+# Row counts of an LP-DiD fit by group of each score dimension: the treated rows and all
+# rows of the estimation sample (`averageeffect`, `pretrendtest`).
+struct DiDInfo
+    ntreated::Int
+    treated::Vector{Vector{Int32}}
+    rows::Vector{Vector{Int32}}
+    ra::Bool                    # a regression-adjustment fit
+end
 
 "Lag-length rule of [`LagAugmented`](@ref)."
 abstract type LagRule end
@@ -380,6 +482,14 @@ struct PanelDesign{R <: PanelResponse}
     zlagorder::Vector{Int}
     zaggseries::Vector{Vector{Float64}}
     zexposures::Vector{Vector{Float64}}
+    # per column: 0, or ℓ for the lead ℓ of a path term `leads(x)`, in the regression of
+    # horizon h when ℓ ≤ h
+    leadorder::Vector{Int}
+    weights::Vector{Float64}                 # observation weights (empty: none)
+    # per column of X and of Z: its formula term and its column within the term (`nothing`
+    # for the intercept), so that a lag of the column is the term evaluated earlier
+    colterm::Vector{Any}
+    zterm::Vector{Any}
 end
 
 # ---------------------------------------------------------------------------------------
@@ -468,6 +578,11 @@ struct HorizonFit
     # without an IV block
     instkeep::BitVector
     firststage::Union{Nothing, FirstStage}   # panel LP-IV fits with status :ok
+    # residual and total sums of squares of the (weighted, within-transformed) regression:
+    # the structural residuals for LP-IV, the SPJ residuals for the jackknife
+    rss::Float64
+    tss::Float64
+    did::Union{Nothing, DiDInfo}             # LP-DiD fits with status :ok
 end
 
 struct PanelSummary
@@ -510,6 +625,10 @@ struct PanelLocalProjection{E <: PanelLPEstimator}
     endogenous::Vector{String}           # panel LP-IV: instrumented coefficients (else empty)
     instruments::Vector{String}          # panel LP-IV: excluded instruments (else empty)
     instlag::Vector{Int}                 # per instrument: ℓ for a lag added by LagAugmented
+    # the horizons a pooled fit averages the response over (empty otherwise); its single
+    # fit is stored at the far end of the window, `horizons`
+    pooled::UnitRange{Int}
+    weights::Union{Nothing, Symbol}      # observation-weight column
 end
 
 # ---------------------------------------------------------------------------------------
@@ -529,6 +648,20 @@ vce(robust)`, and t(n − K − df_a) critical values.
 struct Robust <: PanelVcov
     ssc::Symbol
     Robust(ssc::Symbol) = new(_check_option(ssc, (:none, :stata), "ssc"))
+end
+
+"""
+    Homoskedastic(; ssc = :stata)
+
+Classical variance under homoskedastic, uncorrelated errors: σ̂²(X̃'X̃)⁻¹, with (X̂'X̂)⁻¹
+and the structural residuals for panel LP-IV. `ssc = :stata` is σ̂² = RSS/(n − K − df_a)
+with t(n − K − df_a) critical values (`regress`, `reghdfe`, `ivreg2 …, small`); `:none`
+is σ̂² = RSS/n with normal critical values (`ivreg2` without options). Not defined for
+the split-panel jackknife nor for regression-adjustment LP-DiD fits.
+"""
+struct Homoskedastic <: PanelVcov
+    ssc::Symbol
+    Homoskedastic(ssc::Symbol) = new(_check_option(ssc, (:none, :stata), "ssc"))
 end
 
 """
@@ -696,8 +829,9 @@ end
 
 First-stage diagnostics of a panel LP-IV result ([`firststage`](@ref)), per horizon: the
 Kleibergen–Paap rk Wald F, the Montiel Olea–Pflueger effective F (one endogenous
-regressor), the first-stage coefficients of the instruments and their standard errors. A
-Tables.jl table of the per-horizon statistics.
+regressor), the Cragg–Donald Wald F (homoskedastic errors), the first-stage coefficients
+of the instruments and their standard errors. A Tables.jl table of the per-horizon
+statistics.
 """
 struct FirstStageSummary
     spec::String
@@ -705,6 +839,7 @@ struct FirstStageSummary
     kpF::Vector{Float64}
     effF::Vector{Float64}
     rk::Vector{Float64}          # Kleibergen–Paap rk Wald statistic, χ²(L − m + 1)
+    cdF::Vector{Float64}         # Cragg–Donald Wald F
     ninst::Vector{Int}
     nendo::Vector{Int}
     nobs::Vector{Int}

@@ -29,6 +29,10 @@ installed by `crosscheck/stata/setup_stata.do`.
 | weakivtest | (no header) | SSC | 20260722 (Phase 6) |
 | avar | 1.0.07 (28jul2015; a weakivtest dependency) | SSC | 20150730 (Phase 6c) |
 | distinct | 1.2.1 (1mar2012; a weakivtest dependency) | SSC | 20120321 (Phase 6c) |
+| lpdid | 1.1.0 (20sep2026; Busch & Girardi; GPL-3, run only, never ported) | SSC | 20260921 (Phase 7) |
+| listreg | 1.0.3 (26apr2025; Ben Jann; an lpdid dependency) | SSC | 20250426 (Phase 7) |
+| boottest | 4.5.5 (24 October 2026; David Roodman; an lpdid dependency) | SSC | 20261028 (Phase 7) |
+| ereplace | 1.0.3 (Chris Larkin; used by the Ilzetzki replication package) | SSC | 20200511 (Phase 7) |
 
 SSC packages cannot be pinned. A failed `ado_manifest.py --check` means an upstream
 change: rerun the cross-checks, review the diff of the committed outputs, then
@@ -52,4 +56,6 @@ Python 3.13.12 in `.venv` (uv): stata_setup 0.1.3, numpy 2.5.4, pandas 3.0.6.
 ## Julia
 
 Julia 1.12.6 (release) and 1.10.12 (LTS, the compat floor), with versioned manifests
-`Manifest-v1.12.toml` and `Manifest-v1.10.toml`.
+`Manifest-v1.12.toml` and `Manifest-v1.10.toml`. Phase 7 (2026-11-18) ran on Julia 1.13.3
+and 1.10.13: juliaup's `release` channel had moved, and the fixtures regenerate
+identically.

@@ -21,10 +21,26 @@ _term(t) = t
 
 """
     leads(y)
+    leads(x, a:b)
 
-Response `y_{i,t+h}` at horizon `h` (left-hand side of a `panellp` formula).
+On the left-hand side, the response `y_{i,t+h}` at horizon `h`.
+
+On the right-hand side, leads of a regressor. `leads(x, a:b)` (or `leads(x, p)` for `1:p`)
+adds `x_{i,t+a}, …, x_{i,t+b}` at every horizon, named `F1.x`, `F2.x`, …. `leads(x)`
+without a range is the path of `x` between the shock and the response: `x_{i,t+1}, …,
+x_{i,t+h}` at horizon `h` and nothing at `h ≤ 0`, so that the coefficient of `x_{i,t}` is
+the response to `x` at `t` holding its later values fixed (as Ilzetzki 2024 and the
+future-treatment controls of Dube, Girardi, Jordà & Taylor 2025, Section 4.3). A path term
+is an exogenous regressor of its own: it cannot be nested in another term nor in an IV
+block.
 """
 leads(y) = LeadsResponse(_term(y))
+leads(x, p::Integer) = leads(x, 1:Int(p))
+function leads(x, r::AbstractUnitRange{<:Integer})
+    first(r) >= 0 || throw(ArgumentError("leads must be non-negative; got $r"))
+    isempty(r) && throw(ArgumentError("empty lead range $r"))
+    return LeadsTerm(_term(x), Int(first(r)):Int(last(r)))
+end
 
 """
     ldiff(y)
@@ -83,9 +99,13 @@ fe(t::StatsModels.Term) = FETerm([t.sym])
 
 Base.show(io::IO, r::PanelResponse) = print(io, _respname(r))
 Base.show(io::IO, t::LagsTerm) = print(io, "lags(", _termlabel(t.term), ", ", t.lags, ")")
+function Base.show(io::IO, t::LeadsTerm)
+    print(io, "leads(", _termlabel(t.term), t.leads === nothing ? "" : ", $(t.leads)", ")")
+end
 Base.show(io::IO, t::FirstDiffTerm) = print(io, "firstdiff(", _termlabel(t.term), ")")
 Base.show(io::IO, t::FETerm) = join(io, ("fe($v)" for v in t.vars), " & ")
 _termlabel(t) = join(_names(t), ", ")
+_termlabel(t::LeadsTerm) = _termlabel(t.leads === nothing ? t.term : t)
 
 const _HELPERS = (:leads, :ldiff, :anchor, :cumul, :lags, :firstdiff, :fe)
 const _LHS_HELPERS = (:leads, :ldiff, :anchor, :cumul)
@@ -110,30 +130,38 @@ end
 # Rewriting
 # ---------------------------------------------------------------------------------------
 
-function _lagrange(c::StatsModels.ConstantTerm)
+function _lagrange(c::StatsModels.ConstantTerm, f::String = "lags")
     (p = c.n;
         isinteger(p) && p >= 1 ?
         (1:Int(p)) :
-        throw(ArgumentError("lags(x, p) needs an integer p ≥ 1; got $p")))
+        throw(ArgumentError("$f(x, p) needs an integer p ≥ 1; got $p")))
 end
-function _lagrange(t::StatsModels.FunctionTerm)
+function _lagrange(t::StatsModels.FunctionTerm, f::String = "lags")
     (t.f === (:) && length(t.args) == 2 &&
      all(a -> a isa StatsModels.ConstantTerm, t.args)) ||
-        throw(ArgumentError("lags(x, …) takes an integer p or a range a:b; got $(t.exorig)"))
+        throw(ArgumentError("$f(x, …) takes an integer p or a range a:b; got $(t.exorig)"))
     a, b = t.args[1].n, t.args[2].n
     (isinteger(a) && isinteger(b) && a >= 0 && b >= a) ||
-        throw(ArgumentError("lags(x, a:b) needs integers 0 ≤ a ≤ b; got $(t.exorig)"))
+        throw(ArgumentError("$f(x, a:b) needs integers 0 ≤ a ≤ b; got $(t.exorig)"))
     return Int(a):Int(b)
 end
-_lagrange(t) = throw(ArgumentError("lags(x, …) takes an integer p or a range a:b"))
+function _lagrange(t, f::String = "lags")
+    throw(ArgumentError("$f(x, …) takes an integer p or a range a:b"))
+end
 
 # Inner (non-response, non-FE) terms: regressors and the arguments of helpers.
 _inner(t::StatsModels.Term) = VarTerm(t.sym)
 _inner(t::StatsModels.ContinuousTerm) = VarTerm(t.sym)
 _inner(t::StatsModels.ConstantTerm) = ConstTerm(Float64(t.n))
 _inner(t::StatsModels.InteractionTerm) = ProductTerm(Any[_inner(c) for c in t.terms])
-_inner(t::Union{VarTerm, ConstTerm, FunTerm, ProductTerm, LagsTerm, FirstDiffTerm}) = t
+function _inner(t::Union{
+        VarTerm, ConstTerm, FunTerm, ProductTerm, LagsTerm, LeadsTerm, FirstDiffTerm})
+    t
+end
 _inner(t::FETerm) = throw(ArgumentError("fe() terms cannot be nested inside other terms"))
+# `leads(x)` built programmatically is the response type; on the right-hand side it is
+# the path of x
+_inner(t::LeadsResponse) = LeadsTerm(t.term, nothing)
 function _inner(t::PanelResponse)
     throw(ArgumentError(
         "$(_respname(t)) is a left-hand-side term; horizon-dependent right-hand-side terms are " *
@@ -148,6 +176,11 @@ function _inner(t::StatsModels.FunctionTerm)
     elseif h === :firstdiff
         length(t.args) == 1 || throw(ArgumentError("firstdiff takes one argument"))
         return FirstDiffTerm(_inner(t.args[1]))
+    elseif h === :leads
+        length(t.args) == 1 && return LeadsTerm(_inner(t.args[1]), nothing)
+        length(t.args) == 2 ||
+            throw(ArgumentError("leads takes one or two arguments, leads(x) or leads(x, a:b)"))
+        return LeadsTerm(_inner(t.args[1]), _lagrange(t.args[2], "leads"))
     elseif h === :fe
         throw(ArgumentError("fe() terms cannot be nested inside other terms"))
     elseif h !== nothing
@@ -265,10 +298,22 @@ function _rewrite_rhs(rhs)
             push!(fes, f)
             continue
         end
-        push!(regs, _inner(t))
+        r = _inner(t)
+        _haspath(r isa LeadsTerm && r.leads === nothing ? r.term : r) &&
+            throw(ArgumentError(
+                "leads(x) without a range (the path of x up to the horizon) is a regressor " *
+                "of its own: it cannot be nested inside another term; got $(repr(r))"))
+        push!(regs, r)
     end
     return regs, fes, intercept, iv
 end
+
+# Whether a term contains a path term, `leads(x)` without a range.
+_haspath(t::LeadsTerm) = t.leads === nothing || _haspath(t.term)
+_haspath(t::Union{LagsTerm, FirstDiffTerm}) = _haspath(t.term)
+_haspath(t::FunTerm) = any(_haspath, t.args)
+_haspath(t::ProductTerm) = any(_haspath, t.terms)
+_haspath(t) = false
 
 # The block (endo ~ inst) of a panel LP-IV: its endogenous regressors and excluded
 # instruments, each side a sum of right-hand-side terms (fixed effects and constants are
@@ -284,6 +329,10 @@ function _rewrite_iv(t::StatsModels.FormulaTerm)
                 "fe() terms cannot be inside (endo ~ inst): absorb fixed effects outside the " *
                 "block, where they apply to both stages"))
             push!(out, _inner(c))
+            _haspath(out[end]) && throw(ArgumentError(
+                "leads(x) without a range (the path of x up to the horizon) cannot be " *
+                "inside (endo ~ inst): it is an exogenous regressor of both stages, " *
+                "outside the block"))
         end
         return out
     end
@@ -309,6 +358,11 @@ _wrap(n::AbstractString) = occursin(' ', n) ? "($n)" : n
 function _names(t::LagsTerm)
     [string("L", l, ".", _wrap(n)) for l in t.lags for n in _names(t.term)]
 end
+function _names(t::LeadsTerm)
+    t.leads === nothing && throw(ArgumentError(
+        "leads(x) without a range is a right-hand-side term of its own"))
+    return [string("F", l, ".", _wrap(n)) for l in t.leads for n in _names(t.term)]
+end
 _names(t::FirstDiffTerm) = [string("D.", _wrap(n)) for n in _names(t.term)]
 _fename(t::FETerm) = join(string.(t.vars), "&")
 
@@ -322,7 +376,7 @@ _vars!(s::Set{Symbol}, t::VarTerm) = push!(s, t.sym)
 _vars!(s::Set{Symbol}, ::ConstTerm) = s
 _vars!(s::Set{Symbol}, t::FunTerm) = (foreach(a -> _vars!(s, a), t.args); s)
 _vars!(s::Set{Symbol}, t::ProductTerm) = (foreach(a -> _vars!(s, a), t.terms); s)
-_vars!(s::Set{Symbol}, t::Union{LagsTerm, FirstDiffTerm}) = _vars!(s, t.term)
+_vars!(s::Set{Symbol}, t::Union{LagsTerm, LeadsTerm, FirstDiffTerm}) = _vars!(s, t.term)
 function _vars!(s::Set{Symbol}, r::Union{
         LeadsResponse, LDiffResponse, CumulResponse, PlainResponse})
     _vars!(s, r.term)
@@ -342,23 +396,34 @@ end
 
 _n(ctx::_EvalContext) = nrows(ctx.pidx)
 
-function _cols(t::VarTerm, ctx::_EvalContext)
-    haskey(ctx.columns, t.sym) || throw(ArgumentError("column $(t.sym) not found"))
-    return reshape(copy(ctx.columns[t.sym]), :, 1)
+# The rows of (unit, period + k), cached per offset.
+function _shiftof(ctx::_EvalContext, k::Int)
+    get!(() -> _shift(ctx.pidx, k), ctx.shifts, k)
 end
-_cols(t::ConstTerm, ctx::_EvalContext) = fill(t.value, _n(ctx), 1)
+
+# `_cols(t, ctx, k)` evaluates a term k periods ahead: column c at row (i, t) is the value
+# of the term at (i, t + k). The offset is passed down to the data columns, so nested
+# shifts compose (`lags(lags(x, 1), 1)` reads x at t − 2 directly) and never go through an
+# intermediate row, which may be absent while the period finally read is present.
+function _cols(t::VarTerm, ctx::_EvalContext, k::Int = 0)
+    haskey(ctx.columns, t.sym) || throw(ArgumentError("column $(t.sym) not found"))
+    x = ctx.columns[t.sym]
+    return reshape(k == 0 ? copy(x) : _gather(x, _shiftof(ctx, k)), :, 1)
+end
+_cols(t::ConstTerm, ctx::_EvalContext, k::Int = 0) = fill(t.value, _n(ctx), 1)
 
 # A function term is evaluated elementwise on the rows where every data column under it is
 # finite, with the natural element types of nested calls (so `ifelse(x > 0, x, 0)` and
 # `!(x > 0)` work), and is undefined (NaN) elsewhere: a missing input never becomes a value
 # (`NaN > 0` would be a defined `false`).
-function _leafcols!(leaves::Vector{Vector{Float64}}, t::FunTerm, ctx::_EvalContext)
+function _leafcols!(leaves::Vector{Vector{Float64}}, t::FunTerm, ctx::_EvalContext,
+        k::Int)
     for a in t.args
         a isa ConstTerm && continue
         if a isa FunTerm
-            _leafcols!(leaves, a, ctx)
+            _leafcols!(leaves, a, ctx, k)
         else
-            c = _cols(a, ctx)
+            c = _cols(a, ctx, k)
             size(c, 2) == 1 ||
                 throw(ArgumentError("arguments of $(t.name) must be single columns"))
             push!(leaves, vec(c))
@@ -375,69 +440,56 @@ function _funeval(t::FunTerm, leaves, rows::Vector{Int}, next::Base.RefValue{Int
     end
     return t.f.(args...)
 end
-function _cols(t::FunTerm, ctx::_EvalContext)
-    leaves = _leafcols!(Vector{Float64}[], t, ctx)
+function _cols(t::FunTerm, ctx::_EvalContext, k::Int = 0)
+    leaves = _leafcols!(Vector{Float64}[], t, ctx, k)
     rows = [r for r in 1:_n(ctx) if all(c -> isfinite(c[r]), leaves)]
     v = _funeval(t, leaves, rows, Ref(0))
     out = fill(NaN, _n(ctx), 1)
-    for (k, r) in enumerate(rows)
-        out[r, 1] = Float64(v isa AbstractArray ? v[k] : v)
+    for (i, r) in enumerate(rows)
+        out[r, 1] = Float64(v isa AbstractArray ? v[i] : v)
     end
     return out
 end
-function _cols(t::ProductTerm, ctx::_EvalContext)
-    out = _cols(t.terms[1], ctx)
+function _cols(t::ProductTerm, ctx::_EvalContext, k::Int = 0)
+    out = _cols(t.terms[1], ctx, k)
     for c in t.terms[2:end]
-        out = _rowkron(out, _cols(c, ctx))
+        out = _rowkron(out, _cols(c, ctx, k))
     end
     return out
 end
-function _cols(t::LagsTerm, ctx::_EvalContext)
-    inner = _cols(t.term, ctx)
-    out = Matrix{Float64}(undef, _n(ctx), length(t.lags) * size(inner, 2))
-    c = 0
-    for l in t.lags
-        idx = _shift(ctx.pidx, -l)
-        for j in axes(inner, 2)
-            c += 1
-            out[:, c] = _gather(view(inner, :, j), idx)
-        end
-    end
-    return out
+function _cols(t::LagsTerm, ctx::_EvalContext, k::Int = 0)
+    return reduce(hcat, [_cols(t.term, ctx, k - l) for l in t.lags])
 end
-function _cols(t::FirstDiffTerm, ctx::_EvalContext)
-    inner = _cols(t.term, ctx)
-    idx = _shift(ctx.pidx, -1)
-    out = similar(inner)
-    for j in axes(inner, 2)
-        x = view(inner, :, j)
-        out[:, j] = x .- _gather(x, idx)
-    end
-    return out
+function _cols(t::LeadsTerm, ctx::_EvalContext, k::Int = 0)
+    t.leads === nothing && throw(ArgumentError(
+        "leads(x) without a range is a right-hand-side term of its own"))
+    return reduce(hcat, [_cols(t.term, ctx, k + l) for l in t.leads])
+end
+function _cols(t::FirstDiffTerm, ctx::_EvalContext, k::Int = 0)
+    return _cols(t.term, ctx, k) .- _cols(t.term, ctx, k - 1)
 end
 
-_col1(t, ctx) = vec(_cols(t, ctx))
+_col1(t, ctx, k::Int = 0) = vec(_cols(t, ctx, k))
 
 """
     _lhs_at(r::PanelResponse, ctx, h) -> Vector{Float64}
 
 The response at horizon `h` for every data row (NaN where undefined).
 """
-function _lhs_at(r::LeadsResponse, ctx::_EvalContext, h::Integer)
-    _gather(_col1(r.term, ctx), _shift(ctx.pidx, h))
-end
+_lhs_at(r::LeadsResponse, ctx::_EvalContext, h::Integer) = _col1(r.term, ctx, Int(h))
 function _lhs_at(r::LDiffResponse, ctx::_EvalContext, h::Integer)
-    y = _col1(r.term, ctx)
-    return _gather(y, _shift(ctx.pidx, h)) .- _gather(y, _shift(ctx.pidx, -1))
+    return _col1(r.term, ctx, Int(h)) .- _col1(r.term, ctx, -1)
 end
 function _lhs_at(r::AnchorResponse, ctx::_EvalContext, h::Integer)
-    _gather(_col1(r.term, ctx), _shift(ctx.pidx, h)) .- _col1(r.base, ctx)
+    _col1(r.term, ctx, Int(h)) .- _col1(r.base, ctx)
 end
 function _lhs_at(r::CumulResponse, ctx::_EvalContext, h::Integer)
-    y = _col1(r.term, ctx)
-    acc = _gather(y, _shift(ctx.pidx, 0))
+    h >= 0 || throw(ArgumentError(
+        "cumul(y) sums the response from t to t + h: it is not defined at the negative " *
+        "horizon $h"))
+    acc = _col1(r.term, ctx, 0)
     for k in 1:h
-        acc .+= _gather(y, _shift(ctx.pidx, k))
+        acc .+= _col1(r.term, ctx, k)
     end
     return acc
 end

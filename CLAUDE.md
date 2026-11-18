@@ -8,9 +8,10 @@ PanelLocalProjections.jl estimates panel local projections: for each horizon h i
 
 - **Mei–Sheng–Shi (2026, *JIE*):** the Nickell bias of the FE estimator and the split-panel jackknife (SPJ) correction. Their Stata command is `xtlp`.
 - **Ugarte-Ruiz (2026):** cumulative-difference OLS (CD-OLS). It regresses y_{t+h} − y_{t−1} on s_t and s_{t−1} by pooled OLS, without unit FE.
+- **Dube–Girardi–Jordà–Taylor (2025, *JAE*):** **LP-DiD**, difference-in-differences by local projections on clean-control samples. Their Stata command is `lpdid` (GPL-3).
 - **Almuzara–Sancibrián (2026):** **t-LAHR** inference. It is time-clustered, lag-augmented and heteroskedasticity-robust, with an HC2 + Imbens–Kolesár df refinement. `starting_idea.md` calls it a "HAR estimator", but it is **not** HAR: Driscoll–Kraay, EWC and unit/two-way clustering are its *comparators*.
 
-The phased roadmap, with exit criteria per phase, is in `TODO.md`. Panel LP-IV is v0.2.0 (Phase 6: 6a IV core 19bf450, 6b lag-augmented IV 91564d3, 6c first-stage diagnostics, a public-data example and the release; design in `docs/notes/design/lpiv_design.md`).
+The phased roadmap, with exit criteria per phase, is in `TODO.md`. Panel LP-IV is v0.2.0 (Phase 6: 6a IV core 19bf450, 6b lag-augmented IV 91564d3, 6c first-stage diagnostics, a public-data example and the release; design in `docs/notes/design/lpiv_design.md`). LP-DiD, negative horizons, lead paths, weights and pooled fits are v0.3.0 (Phase 7).
 
 ## Hard rules
 
@@ -19,7 +20,7 @@ The phased roadmap, with exit criteria per phase, is in `TODO.md`. Panel LP-IV i
   - Allowed deps: StatsModels, Tables, StatsAPI, StatsFuns, RecipesBase and stdlibs; Makie only as a weakdep.
   - Code adapted from Regress.jl/CovarianceMatrices.jl/FixedEffectModels.jl, from `~/Workspace/LocalProjections.jl` (the user's fork; its `src/terms.jl` is the source of the LHS formula DSL), or from MIT-licensed reference code (MSS R, `xtlp`) carries a source comment naming the project and file.
 - **Licences.**
-  - The Almuzara–Sancibrián MATLAB/R code has **no licence** and `pLP` is CC BY-NC-SA. Implement those methods from the papers' formulas only; never translate the code.
+  - The Almuzara–Sancibrián MATLAB/R code has **no licence**, `pLP` is CC BY-NC-SA and `lpdid` is GPL-3 (this package is MIT). Implement those methods from the papers' formulas only; never translate the code. `lpdid` is run as a black box to compare outputs.
   - Never commit third-party code or data.
   - Outputs of any tool computed on *our own* synthetic panels may be committed, including A&S `panel_LP.R` outputs. Each such file is listed in `test/fixtures/README.md`.
 - **Local-only reference material.** It is gitignored, read-only, and never formatted or committed:
@@ -28,8 +29,10 @@ The phased roadmap, with exit criteria per phase, is in `TODO.md`. Panel LP-IV i
     - `panel-lp-replication/` is the current MSS replication kit (`applications/LP_panel_all.r` + CSVs + `data_preparation/*.dta`);
     - `nickell_bias/*.zip` is an older snapshot;
     - `PanelLocalProjections/` is the A&S code;
-    - `ramey_govinfrastructure_replication/` is Ramey's code.
-  - `docs/data/`: third-party replication packages and data built from them. It holds the OW20 Econometrica package, and the US state example data built by `examples/us_states/build.jl`. The user has no WRDS/Compustat access, so the firm-level studies are call mappings only.
+    - `ramey_govinfrastructure_replication/` is Ramey's code;
+    - `lpdid/` is the LP-DiD repository (README, changelog, example do/R files; GPL-3);
+    - `aer_ei/` is the replication package of Ilzetzki (2024, AER; code BSD-3, data CC BY 4.0).
+  - `docs/data/`: third-party replication packages and data built from them. It holds the OW20 Econometrica package, the US state example data built by `examples/us_states/build.jl`, and `ilzetzki/ilzetzki_panel.csv` built by `crosscheck/stata/ilzetzki_local.do`. The user has no WRDS/Compustat access, so the firm-level studies are call mappings only.
   - `docs/notes/`: planning research reports, the design draft, 52 adversarial review findings, and `design/approved_plan.md` (**the authoritative design**). Claims tagged [I]/[INF]/[W] there are unverified.
   - The markdown conversions have garbled spots: MSS main.md:132 and eq. (22); A&S Table 3 row labels. Check the notes before trusting a garbled formula.
 - **Git.** Work on `dev`. Commit only when a phase gate passes (see `TODO.md`). Never push.
@@ -37,7 +40,7 @@ The phased roadmap, with exit criteria per phase, is in `TODO.md`. Panel LP-IV i
 ## Commands
 
 ```bash
-# Package environment (Julia 1.12; manifests are per version: Manifest-v1.12.toml / Manifest-v1.10.toml, gitignored)
+# Package environment (Julia release, 1.13 since 2026-11; manifests are per version, e.g. Manifest-v1.10.toml, gitignored)
 julia --project -e 'using Pkg; Pkg.instantiate()'
 julia --project -e 'using Pkg; Pkg.test()'                      # full suite: TestItemRunner items + Aqua
 julia +lts --project -e 'using Pkg; Pkg.test()'                 # compat floor 1.10 (first time: Pkg.resolve() before Pkg.test())
@@ -59,30 +62,36 @@ Rscript crosscheck/R/<file>.R
 ```
 
 - **Test tags:**
-  - `:core`, `:aqua`, `:fixtures`, `:panel`, `:formula`, `:absorb`, `:ols`, `:vcov`, `:api`, `:spj`, `:cdols`, `:tlahr`, `:lpiv`, `:mc` (Monte Carlo, ~45 s in all), `:crosscheck` (with `:stata`/`:r`);
+  - `:core`, `:aqua`, `:fixtures`, `:panel`, `:formula`, `:absorb`, `:ols`, `:vcov`, `:api`, `:spj`, `:cdols`, `:tlahr`, `:lpiv`, `:lpdid`, `:mc` (Monte Carlo, ~45 s in all), `:crosscheck` (with `:stata`/`:r`);
   - `:mc_full` runs only with `PLP_MC_FULL=1` (the Almuzara–Sancibrián Table 1 at the paper's size: ~15 min);
-  - `:local_mss` items are skipped automatically when their local data is absent (`test/runtests.jl`).
+  - `:local_mss` and `:local_ei` (Ilzetzki 2024) items are skipped automatically when their local data is absent (`test/runtests.jl`).
 - **Formatting:** files that use `@testitem … setup = [...]` start with `#! format: off`, because the SciML style mangles them.
 - **Kaimon.** When the `mcp__kaimon__*` tools are available, use the live REPL (session for this repo via `start_session(project_path = …)`, then `ex`) instead of spawning `julia` for exploration. Revise picks up `src/` edits automatically, but a struct change in `src/types.jl` needs `manage_repl(command = "restart")`. Load test-only packages and the fixtures with `pushfirst!(LOAD_PATH, joinpath(pkgdir(PanelLocalProjections), "dev"))` and `include("test/support/PLPDGPs.jl")` (`read_csv`). `run_tests` runs the whole suite, because TestItemRunner ignores its pattern argument.
 - **Scale benchmark:** `julia --project=. -e 'push!(LOAD_PATH, "dev"); include("dev/benchmark_scale.jl")'` (about 70 s; `PLP_BENCH=fe`, `tlahr` or `capped` runs one part, for its own max RSS). Reference for 1.1M rows and 21 horizons: fixed effects 13.9 s, 14 sweeps per horizon, 1.3 GB max RSS; `LagAugmented(ICLags())` 19.6 s and `TLAHR()` 0.8 s, 1.8 GB; `LagAugmented(CappedLags())` 24.5 s, 2.2 GB (Phase 5).
 
-## Architecture (v0.1: Phases 1–5; v0.2: Phase 6, panel LP-IV; see `TODO.md`)
+## Architecture (v0.1: Phases 1–5; v0.2: Phase 6, panel LP-IV; v0.3: Phase 7, LP-DiD; see `TODO.md`)
 
-One module and no submodules. Every struct lives in `src/types.jl`. Include order: `utils` → `types` → `panelindex` → `formula` → `design` → `absorb` → `ols` → `scores` → `lagselect` → `estimators` → `panellp` → `vcov` → `summary` → `plotting`; Makie lives in `ext/`.
+One module and no submodules. Every struct lives in `src/types.jl`. Include order: `utils` → `types` → `panelindex` → `formula` → `design` → `absorb` → `ols` → `scores` → `lagselect` → `estimators` → `panellp` → `vcov` → `summary` → `lpdid` → `plotting`; Makie lives in `ext/`.
 
-**Pipeline.** `panellp(f, data; id, time, horizon, estimator, subset, sample, singletons, absorb, clusters)` runs these stages:
+**Pipeline.** `panellp(f, data; id, time, horizon, estimator, subset, sample, singletons, absorb, clusters, weights, pooled)` runs these stages:
 1. `PanelIndex`: unit codes, integer calendar periods (Dates need `frequency`), and a (unit, period) → row lookup.
-2. Formula rewrite into our own term types (`leads`, `ldiff`, `anchor`, `cumul`, `lags`, `firstdiff`, `fe`).
+2. Formula rewrite into our own term types (`leads`, `ldiff`, `anchor`, `cumul`, `lags`, `firstdiff`, `fe`; `leads` on the right-hand side is a `LeadsTerm`).
 3. `PanelDesign`: a NaN float table, with the RHS built once by gathers.
-4. Per-horizon mask, then the singleton policy.
+4. Per-horizon mask (`_sample`: the response, `_leadmask!`, and the estimator's `_estmask!`), then the singleton policy.
 5. FE absorption (`absorb.jl`), then an absorbed-column screen and pivoted QR (`ols.jl`).
-6. The estimator's fit: `WithinFE` / `SplitPanelJackknife` / `CDOLS` / `LagAugmented`.
+6. The estimator's fit: `WithinFE` / `SplitPanelJackknife` / `CDOLS` / `LagAugmented` / `LPDiD` (resolved to `_DiD` by `_augment`).
 7. `HorizonFit`, which stores per-group score sums, the bread and the synthetic series. It does **not** store the design matrix.
 
-`vcov(spec, r)` is computed post-estimation (`Robust`, `Clustered`, `DriscollKraaySE`, `TLAHR`, `CosineHAR`); `summarize` and plotting work from its result.
+`vcov(spec, r)` is computed post-estimation (`Robust`, `Homoskedastic`, `Clustered`, `DriscollKraaySE`, `TLAHR`, `CosineHAR`); `summarize` and plotting work from its result.
 
 **Invariants:**
 - Never shift by row position. Never drop missing values before shifting. Use NaN, not `missing`.
+- Terms are evaluated with an offset, `_cols(t, ctx, k)` (the term k periods ahead), passed down to the data columns: nested shifts compose and never read an intermediate row. A lag that `LagAugmented` adds is the column's term at offset −ℓ (`PanelDesign.colterm`, `zterm`), not a gather of the built column.
+- Horizons may be negative (`horizon = -6:12`); index fits with `h - first(horizons) + 1`, never `h + 1`. `ldiff` is identically zero at h = −1 (coefficient and variance 0). `cumul` and `LagAugmented` reject negative horizons.
+- Columns can be horizon-dependent: a path term `leads(x)` adds `F1.x … FH.x` with `PanelDesign.leadorder` = the lead; horizon h uses `_horizoncols(d, h)` (leads ≤ max(h, 0)), `rhsok` ignores them and `_leadmask!` requires those of the horizon. Inactive coefficients are NaN and not reported as omitted (`HorizonFit.active`).
+- Observation weights (`PanelDesign.weights`, empty without): `_within_fit` absorbs with weighted means and then scales every row by √w, so OLS, 2SLS, residuals and scores downstream are unweighted code; `rss`/`tss` are weighted. Weighted and IV fits store no synthetic series.
+- LP-DiD (`lpdid.jl`): the formula is `ldiff(y) ~ firstdiff(D) + fe(time)`; `_did_resolve` builds the treatment histories once, `_cleanflag(s, pidx, h)` the sample of horizon h (rules evaluated on all the data, a condition on an unobserved value is false), `_response` the long difference from the base (`pmd`). `reweight` is a weighted fit (`_rwweights`; `:lpdid` adds `_rwextra` rows to a period's controls) or, with covariates or further FE, regression adjustment (`_fit_ra`: only the treatment coefficient, bread 1, the influence function as the score, no singleton dropping). `HorizonFit.did` (`DiDInfo`) holds treated and total row counts by group, which `averageeffect` and `pretrendtest` combine with the score sums across horizons. Written from the paper; never from the GPL ado.
+- `pooled = true` stores one fit at the far end of the window (`r.horizons` is that single horizon, `r.pooled` the window).
 - Re-absorb every FE on each horizon's sample and inside each SPJ half. Screen each half for absorbed columns as `_ols` does (`_absorbed_cols`): rescaling a round-off column turns it into an arbitrary coefficient. A failing half makes the horizon `:spj_half_singular`, and with no `:ok` horizon `panellp` throws.
 - A shock absorbed by the FE (e.g. an aggregate shock with `fe(time)`) is never a zero coefficient. It is an error when it happens at every horizon. At some horizons only, those fits are `:singular` with NaN coefficients.
 - Problems at some horizons (empty, singular, omitted regressors, non-convergence) are reported once per `panellp` call (`_fitnotes`) and listed by `show(r)`. Never use `maxlog`, which silences later calls for the rest of the session.
@@ -105,12 +114,16 @@ One module and no submodules. Every struct lives in `src/types.jl`. Include orde
 - `SplitPanelJackknife(split = :floor)`;
 - `CappedLags`: the A&S code's lag rule;
 - `TLAHR(weights = :raw)`: the A&S code's synthetic regression (raw exposure, unweighted periods);
-- `timelags = :position`: xtlp/xtscc DK.
+- `timelags = :position`: xtlp/xtscc DK;
+- `LPDiD(reweight = :lpdid)`: lpdid 1.1.0's count of a period's controls in the reweighted regression;
+- `Homoskedastic(ssc = :none)`: ivreg2 without options (Ilzetzki 2024).
 
 The map from each reference command to the matching Julia options is in `crosscheck/README.md`.
 
 ## Cross-check gotchas
 
+- **lpdid.** Rows `pre{k}` are h = −k; `t` and `p` are stored rounded; `rw` with covariates or `absorb()` is regression adjustment (listreg) with normal critical values and no small-sample factor; its `rw` weights count clean rows with an undefined ΔD (`docs/src/audit/lpdid.md`).
+- **dcg hook.** It blocks shell heredocs that contain code with backticks or `$(…)`: write scripts with the Write tool and run the file.
 - **Stata.**
   - Every do-file starts with `do "$PLP_ROOT/crosscheck/stata/common.do"`. It sets `set type double` and redirects `sysdir PLUS/PERSONAL` to `crosscheck/ado`, so the user's own ados are never used.
   - Use `import delimited …, asdouble`.

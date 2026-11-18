@@ -27,7 +27,11 @@ unit is absent, the lead at `t` is undefined and that row leaves the horizon-`h`
 Nothing is ever shifted by row position, and no rows are dropped before shifting.
 `missing` (and `NaN`) values in the formula variables are treated the same way. A
 function of a missing value is missing too: `(w > 0)` is undefined where `w` is
-missing, not `false`.
+missing, not `false`. Shifts compose, so a nested lag reads the period it names and never
+needs the periods in between (`lags(lags(x, 1), 1)` is ``x_{t-2}`` also where period
+``t - 1`` is absent). One difference remains between an absent period and a row of missing
+values: a regression row is a data row, so a row whose own values are missing can still be
+an observation of a formula that uses only its leads and lags.
 
 Each horizon's sample is the set of rows where the response and every regressor are
 defined, and where every fixed-effect and declared cluster variable is non-missing

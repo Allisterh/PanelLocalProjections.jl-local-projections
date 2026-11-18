@@ -452,7 +452,8 @@ end
     # the default is t-LAHR's CR0 by period (A&S supplement A.4)
     @test firststage(r1).kpF ≈ firststage(r1; vcov = Clustered(:time; ssc = :none)).kpF
     # a Tables.jl table; shown per horizon
-    @test Tables.columnnames(Tables.columns(f1)) == (:horizon, :kpF, :effF, :rk, :ninst, :nendo, :nobs)
+    @test Tables.columnnames(Tables.columns(f1)) ==
+          (:horizon, :kpF, :effF, :rk, :cdF, :ninst, :nendo, :nobs)
     @test occursin("KP rk Wald F", sprint(show, MIME"text/plain"(), f1))
     # lag augmentation: the instrument lags of p(h) enter the first stage
     rl = panellp(@formula(leads(y) ~ (s & ffr ~ s & mp) + w + fe(id) + fe(t)), d; kw...,

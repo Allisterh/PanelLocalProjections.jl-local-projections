@@ -233,3 +233,55 @@ max(df_a − its levels, 1).
 | `ivreghdfe …, absorb(id) cluster(id) \| robust`, then `weakivtest`: `r(F_eff)` | `Clustered(:unit; ssc = :none)` ÷ nested factor / `Robust()`, `effF` | 4e-14 |
 | two endogenous regressors, three instruments (`sffr svffr = smp svmp wmp`): robust, `cluster(t)`, `absorb(id) cluster(id)` | as above | 2e-11 |
 | `ivreghdfe Fy (g1ffr g2ffr g3ffr = g1mp g2mp g3mp), absorb(id) robust` (diagonal Π̂, tied singular values) | `Robust()` | 4e-15 |
+
+### Phase 7: LP-DiD, negative horizons, lead paths, weights
+
+**LP-DiD** against `lpdid` 1.1.0 (Busch & Girardi; GPL-3, run as a black box) on the
+`fx_lpdid` panels: `crosscheck/stata/p7_lpdid.do` → `test/fixtures/stata/p7_lpdid.csv`
+(1424 rows: 47 option sets × 2 panels, with the event-study, pooled, aggregate and
+pre-trend tables), compared in `test/test_crosscheck_p7.jl`. The formula is
+`ldiff(y) ~ firstdiff(d) + fe(t)` with `estimator = LPDiD(…)`, `horizon = -5:8`.
+
+| `lpdid y, unit(id) time(t) treat(d) pre_window(5) post_window(8) …` | `panellp` | `vcov` spec | Agreement |
+|---|---|---|---|
+| (baseline); `cluster(st)`; `[pweight = w]` | `LPDiD()`; `clusters = (:st,)`; `weights = :w` | `Clustered(:unit)`; `Clustered(:st)` | b 5e-15, se 5e-11 |
+| `ylags(2) controls(x)`, `dylags(2)`, `controls(x xb)`, `absorb(reg)` | `lags(y, 1:2) + x`, `lags(firstdiff(y), 1:2)`, `x + xb`, `fe(reg)` | `Clustered(:unit)` | as above |
+| `pmd(max)`, `pmd(3)`; `nevertreated`; `nocomp` | `LPDiD(pmd = :max \| 3)`; `control = :nevertreated`; `sample = :common` | as above | as above |
+| `pooled`, `post_pooled(2 6) pre_pooled(3 5)` | `pooled = true` with `horizon = 0:8 \| -5:-2`, `2:6 \| -5:-3` | as above | 1e-15 |
+| `rw` (also with weights, `nocomp`, `pmd(max) nevertreated`, `pooled`) | `LPDiD(reweight = :lpdid)` | as above | 5e-15 |
+| a hand-written `reghdfe [pweight]` with the factor from the regression rows (`d_rw_hand`) | `LPDiD(reweight = true)` | as above | 4e-15 |
+| `rw` with `controls(x)`, `ylags(1)`, `dylags(2)`, `absorb(reg)`, `[pweight = w]`, `cluster(st)`, `pooled` (regression adjustment through `listreg`) | `LPDiD(reweight = true)` with the same terms | `Clustered(…; ssc = :none)`, normal bands | 2e-15 |
+| `nonabsorbing(5 \| 3)`, `(5, notyet)`, `(5, firsttreat)`, `(, firsttreat notyet)`, `(5, firsttreat notyet) pmd(2)`, with `nevertreated`, `untreated_before`, `pmd(2 \| max)`, `rw`, `nocomp`, `rw dylags(1)`; treatment `d2` | `LPDiD(nonabsorbing = L \| true, control = :notyet \| :nevertreated, firsttreat, untreated_before, …)` | `Clustered(:unit)` | 1e-14 |
+| `nonabsorbing(3, oneoff)` and its `notyet`, `firsttreat`, `nevertreated`, `untreated_before`, `pmd(2)`, `rw` variants; treatment `d3` | `LPDiD(nonabsorbing = 3, oneoff = true, …)` | as above | 1e-14 |
+| `aggregate_average` (rows VWATT / ATT, Pre_avg) | `averageeffect(r; cluster)` | — | 1e-12 |
+| `pretrend_test` (F, p, df) | `pretrendtest(r; cluster)` | — | 3e-11 |
+
+Row `pre{k}` of `e(results)` is h = −k and `tau{h}` is h. `pre1` is h = −1, which `lpdid`
+reports as (0, missing) and `panellp` as a zero coefficient with a zero standard error. A
+pre-treatment difference spanned by the lagged outcomes is zero by construction in both.
+`lpdid`'s `rw` counts the controls of a period differently from the regression's rows on
+unbalanced panels (`docs/src/audit/lpdid.md`): `reweight = :lpdid` reproduces it. The wild
+bootstrap is not compared (not implemented).
+
+**General additions**: `crosscheck/stata/p7_general.do` → `p7_general.csv` (112 rows).
+
+| Reference command (Stata `xtset id t`) | `panellp` | `vcov` spec | Agreement |
+|---|---|---|---|
+| `reghdfe Δ_h y x L(1/2).x [F(1/h).x], absorb(id t) vce(cluster id)`, h = −3..4, with Δ_h y = `F{h}.y − L.y` (`L{−h}.y − L.y` at h < 0); `fx_balanced`, `fx_unbalanced` | `ldiff(y) ~ x + lags(x, 1:2) + leads(x) + fe(id) + fe(t)`, `horizon = -3:4` | `Clustered(:unit)` | b 3e-14, se 4e-11 |
+| the same, `vce(unadjusted)` | as above | `Homoskedastic()` | as above |
+| `reghdfe Δ_h y x F(1/2).x, …` | `leads(x, 1:2)` | `Clustered(:unit)` | as above |
+| `ivreg2 Δ_h y (sffr = smp) L.sffr [F(1/h).sffr] w i.id i.t`, no option / `small`, h = −2..4; `fx_lpiv`, `fx_lpiv_unbal` | `ldiff(y) ~ (s & ffr ~ s & mp) + lags(s & ffr, 1) + leads(s & ffr) + w + fe(id) + fe(t)`, `singletons = :keep` | `Homoskedastic(ssc = :none)` / `Homoskedastic()`; `e(cdf)` is `firststage(r).cdF` | b, se and F 6e-15 |
+| `reghdfe Fy x L.y [pweight = w], absorb(id t) vce(robust \| cluster id \| cluster st)`; `absorb(t)`; `regress … [pweight = w], vce(cluster id)`; `fx_lpdid_unbal` | `weights = :w` | `Robust()`, `Clustered(:unit \| :st)` | b 5e-15, se 2e-11 |
+| `reghdfe … [aweight = w], vce(unadjusted)` | `weights = :w` | `Homoskedastic()` | as above |
+| `ivreghdfe Fy (x = L.x) [pweight = w], absorb(id t) robust` | `(x ~ lags(x, 1))`, `weights = :w` | `Robust()` | as above |
+| `reghdfe ȳ x L(1/2).x, absorb(id t) vce(cluster id)`, ȳ the mean of Δ_h y over h = 0..3 (and over −3..−2) | `pooled = true`, `horizon = 0:3` (`-3:-2`) | `Clustered(:unit)` | within the test tolerance (b 1e-10, se 1e-9) |
+
+At h = −1 the long difference is identically zero: `reghdfe` reports a zero coefficient;
+its classical variance of an all-zero response is not compared.
+
+**Local** (third-party data): `crosscheck/stata/ilzetzki_local.do` builds the data of
+Ilzetzki (2024) with the replication package's own `WWII_Planes.do` and re-runs
+`ivreg2 Δ_h y (x = z) L(1/6).x i.Time i.PlantByModelID controls [F(1/h).x] if …` for his
+Figures 9(c), 9(d), 6(a–b) and A.4, h = −6..18. `test/test_ilzetzki.jl` (tag `:local_ei`)
+compares coefficients and classical standard errors (1e-8), N, the degrees of freedom of
+the bands and the Cragg–Donald F. See `docs/src/replication/ilzetzki2024.md`.

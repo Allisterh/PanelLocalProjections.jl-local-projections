@@ -34,7 +34,8 @@ export panellp, PanelLocalProjection, PanelLPVcov, IRFSummary, @formula
 export leads, ldiff, anchor, cumul, lags, firstdiff, fe
 export WithinFE, SplitPanelJackknife, CDOLS, AlternatingProjections, OneSweep
 export LagAugmented, ICLags, CappedLags, ConstantLags, LagSelection
-export Robust, Clustered, DriscollKraaySE, TLAHR, CosineHAR
+export LPDiD, averageeffect, pretrendtest
+export Robust, Homoskedastic, Clustered, DriscollKraaySE, TLAHR, CosineHAR
 export summarize, coefpath, nobspath, horizons, esample, lagorder, synthetic
 export firststage, FirstStageSummary
 export coef, coefnames, vcov, stderror, nobs
@@ -53,6 +54,7 @@ include("estimators.jl")
 include("panellp.jl")
 include("vcov.jl")
 include("summary.jl")
+include("lpdid.jl")
 include("plotting.jl")
 
 end # module

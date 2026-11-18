@@ -24,8 +24,8 @@ estimated by two-step efficient GMM (`ivregress gmm …, robust`, l.168–175) w
 of ±1.65 standard errors (l.193–194). The outcomes are ARRA obligations and outlays,
 highway spending and highway employment.
 
-`panellp` has no instrumental-variable estimator yet (planned for v0.2), so this
-specification is not reproduced.
+`panellp` estimates panel LP-IV by two-stage least squares (since v0.2), not by two-step
+efficient GMM, so this specification is not reproduced.
 
 ## Findings
 

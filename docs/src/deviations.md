@@ -36,6 +36,27 @@ reference. The audit pages document each reference in detail.
 | no fixed effects | no intercept | an intercept | `0 +` |
 | `Date` time index (R) | broken (day counts) | calendar periods with `frequency` | — |
 
+## Dube, Girardi, Jordà & Taylor (`lpdid` 1.1.0)
+
+| topic | `lpdid` | `panellp` (`LPDiD`) | switch |
+|---|---|---|---|
+| reweighting factor of the weighted regression (`rw`) | the treated share of the period among clean rows with the outcome, including rows whose ``\Delta D`` is undefined and that the regression drops | the treated share among the rows of the regression (the equally weighted average of the cohorts' comparisons) | `reweight = :lpdid` |
+| a treatment that switches off, without `nonabsorbing()` | kept, with a regressor of −1 | an error | `nonabsorbing = L` |
+| `nocomp` with a one-sided window | also requires the pre-treatment horizon 2 (or horizon 0) | the requested horizons (`sample = :common`) | `horizon = -2:H` |
+| pooled regressions under `nocomp` | the flags of both pooled windows | the horizons of the window | — |
+| ``h = -1`` under `pmd()` | reported as zero | estimated | — |
+| standard errors of regression adjustment | no small-sample factor, normal critical values | the specification's | `Clustered(:unit; ssc = :none)` |
+| wild bootstrap | `bootstrap()` through `boottest` | not implemented | — |
+
+## Ilzetzki (2024, `ivreg2` with dummies)
+
+| topic | replication package | `panellp` default | switch |
+|---|---|---|---|
+| variance | classical, ``RSS/N`` (no option to `ivreg2`) | none: the variance is chosen at `summarize` | `Homoskedastic(ssc = :none)` |
+| critical values | Student t with ``N - K``, on a standard error without correction | normal for `ssc = :none` | the degrees of freedom of `Homoskedastic()` |
+| singletons of the line and month dummies | kept | dropped | `singletons = :keep` |
+| first-stage F | Cragg–Donald | Kleibergen–Paap with the chosen variance | `firststage(r).cdF` |
+
 ## Variance conventions shared with other software
 
 | topic | reference | `panellp` | switch |

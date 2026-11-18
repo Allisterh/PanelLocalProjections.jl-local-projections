@@ -71,16 +71,17 @@ const _ROWOF_LIMIT_BYTES = 1 << 30   # 1 GiB
 function PanelIndex(id::AbstractVector, time::AbstractVector; frequency = nothing)
     length(id) == length(time) ||
         throw(DimensionMismatch("id and time have different lengths"))
-    any(ismissing, id) && throw(ArgumentError(
-        "the id column has missing values; drop those rows before calling panellp"))
+    any(_isna, id) && throw(ArgumentError(
+        "the id column has missing values (missing, nothing or NaN); drop those rows " *
+        "before calling panellp"))
     frequency === nothing || (frequency = Symbol(frequency))
     frequency === nothing || frequency in _FREQUENCIES ||
         throw(ArgumentError(
             "frequency must be one of $(join(repr.(_FREQUENCIES), ", ")); got $(repr(frequency))"))
     period = _periods(time, frequency)
-    labels = sort!(unique(id))
+    labels = sort!(unique(_levelkey(v) for v in id))
     code = Dict(v => Int32(i) for (i, v) in enumerate(labels))
-    unit = Int32[code[v] for v in id]
+    unit = Int32[code[_levelkey(v)] for v in id]
     n = length(unit)
     n > 0 || throw(ArgumentError("the data have no rows"))
     pmin, pmax = extrema(period)
