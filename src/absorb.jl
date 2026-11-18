@@ -88,9 +88,32 @@ function _demean_dim!(
     return v
 end
 
-function _sweep!(v, fs::_FESample, sums)
+# The weighted version: v[r] -= Σ w v / Σ w over the group of row r.
+function _demean_dim!(v::AbstractVector{Float64}, codes::Vector{Int32},
+        wsum::Vector{Float64}, sums::Vector{Float64}, w::Vector{Float64})
+    L = length(wsum)
+    fill!(view(sums, 1:L), 0.0)
+    @inbounds for r in eachindex(v)
+        sums[codes[r]] += w[r] * v[r]
+    end
+    @inbounds for g in 1:L
+        sums[g] /= wsum[g]
+    end
+    @inbounds for r in eachindex(v)
+        v[r] -= sums[codes[r]]
+    end
+    return v
+end
+
+# One pass over the fixed-effect dimensions; `bufs.w` holds the observation weights
+# (`nothing` without).
+function _sweep!(v, fs::_FESample, bufs)
     for d in eachindex(fs.codes)
-        _demean_dim!(v, fs.codes[d], fs.counts[d], sums)
+        if bufs.w === nothing
+            _demean_dim!(v, fs.codes[d], fs.counts[d], bufs.sums)
+        else
+            _demean_dim!(v, fs.codes[d], bufs.wsums[d], bufs.sums, bufs.w)
+        end
     end
     return v
 end
@@ -105,38 +128,39 @@ end
 
 # Within-transform v in place; returns (sweeps, converged).
 function _absorb!(v::AbstractVector{Float64}, fs::_FESample, ::OneSweep, bufs)
-    _sweep!(v, fs, bufs.sums)
+    _sweep!(v, fs, bufs)
     return 1, true
 end
 
 function _absorb!(v::AbstractVector{Float64}, fs::_FESample, m::AlternatingProjections, bufs)
     if length(fs.codes) == 1
-        _demean_dim!(v, fs.codes[1], fs.counts[1], bufs.sums)
+        _sweep!(v, fs, bufs)
         return 1, true
     end
-    gx, ggx, sums = bufs.gx, bufs.ggx, bufs.sums
+    gx, ggx = bufs.gx, bufs.ggx
     # The threshold is relative to the column after one sweep, which has removed its level
     # (every dimension spans the constant): the rule depends neither on the units nor on
     # the level of the data, so a small-scale column is not stopped early and an absorbed
     # one still demeans to round-off.
-    _sweep!(v, fs, sums)
+    _sweep!(v, fs, bufs)
     thr = m.tol * maximum(abs, v; init = 0.0)
     thr == 0 && return 1, true
     it = 1
     while it < m.maxiter
         copyto!(gx, v)
-        _sweep!(gx, fs, sums)
+        _sweep!(gx, fs, bufs)
         it += 1
         if _maxabsdiff(gx, v) <= thr
             copyto!(v, gx)
             return it, true
         end
-        if !m.accelerate
+        # never more than `maxiter` sweeps: the accelerated step takes two
+        if !m.accelerate || it >= m.maxiter
             copyto!(v, gx)
             continue
         end
         copyto!(ggx, gx)
-        _sweep!(ggx, fs, sums)
+        _sweep!(ggx, fs, bufs)
         it += 1
         if _maxabsdiff(ggx, gx) <= thr
             copyto!(v, ggx)
@@ -168,21 +192,35 @@ function _absorb!(v::AbstractVector{Float64}, fs::_FESample, m::AlternatingProje
     return it, false
 end
 
-function _absorb_buffers(n::Int, fs::_FESample)
-    (gx = Vector{Float64}(undef, n),
+function _absorb_buffers(n::Int, fs::_FESample,
+        w::Union{Nothing, Vector{Float64}} = nothing)
+    wsums = Vector{Float64}[]
+    if w !== nothing
+        for (d, codes) in enumerate(fs.codes)
+            ws = zeros(length(fs.counts[d]))
+            for r in eachindex(codes)
+                ws[codes[r]] += w[r]
+            end
+            push!(wsums, ws)
+        end
+    end
+    return (gx = Vector{Float64}(undef, n),
         ggx = Vector{Float64}(undef, n),
-        sums = Vector{Float64}(undef, maximum(length, fs.counts; init = 0)))
+        sums = Vector{Float64}(undef, maximum(length, fs.counts; init = 0)),
+        w = w, wsums = wsums)
 end
 
 """
-    _absorb_matrix!(A, fs, method) -> (sweeps, converged)
+    _absorb_matrix!(A, fs, method, w = nothing) -> (sweeps, converged)
 
-Within-transform every column of `A` in place. Non-convergence is reported by `panellp`,
-once per call, from the fits' `converged` flags.
+Within-transform every column of `A` in place; with observation weights `w`, the group
+means are weighted (the projection off the fixed effects in the metric of the weights).
+Non-convergence is reported by `panellp`, once per call, from the fits' `converged` flags.
 """
-function _absorb_matrix!(A::AbstractMatrix{Float64}, fs::_FESample, method::AbsorptionMethod)
+function _absorb_matrix!(A::AbstractMatrix{Float64}, fs::_FESample,
+        method::AbsorptionMethod, w::Union{Nothing, Vector{Float64}} = nothing)
     isempty(fs.codes) && return 0, true
-    bufs = _absorb_buffers(size(A, 1), fs)
+    bufs = _absorb_buffers(size(A, 1), fs, w)
     maxit = 0
     conv = true
     for j in axes(A, 2)

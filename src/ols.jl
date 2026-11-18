@@ -20,17 +20,30 @@ end
 # Per column of the raw (pre-absorption) regressors: the centred and the raw sums of
 # squares, what the absorbed-column screen and the PSD metric need, so that the raw
 # columns need not be kept once absorbed.
-function _colstats(X::AbstractMatrix{Float64})
+function _colstats(X::AbstractMatrix{Float64}, w::Union{Nothing, Vector{Float64}} = nothing)
     css = zeros(size(X, 2))
     ss = zeros(size(X, 2))
     for j in axes(X, 2)
         x = view(X, :, j)
-        μ = Statistics.mean(x)
-        css[j] = sum(v -> abs2(v - μ), x)
-        ss[j] = sum(abs2, x)
+        if w === nothing
+            μ = Statistics.mean(x)
+            css[j] = sum(v -> abs2(v - μ), x)
+            ss[j] = sum(abs2, x)
+        else
+            μ = LinearAlgebra.dot(w, x) / sum(w)
+            for r in eachindex(x)
+                css[j] += w[r] * abs2(x[r] - μ)
+                ss[j] += w[r] * abs2(x[r])
+            end
+        end
     end
     return (; n = size(X, 1), css, ss)
 end
+
+# A column that is constant in the sample: its centred sum of squares is round-off of its
+# level (the mean of a constant such as 0.35 is not exactly 0.35, so `css == 0` fails).
+const _CONSTANT_TOL = (100 * eps())^2
+_isconstant(css::Float64, ss::Float64) = css <= _CONSTANT_TOL * ss
 
 # Columns absorbed by the fixed effects (or the constant), judged against the
 # pre-absorption centred norm, before any rescaling. `raw`: the raw columns, or their
@@ -46,9 +59,10 @@ function _absorbed_cols(Xt::AbstractMatrix{Float64}, raw::NamedTuple, hasfe::Boo
         css = raw.css[j]
         if hasfe
             # any fixed effect spans the constant
-            absorbed[j] = css == 0 || sum(abs2, view(Xt, :, j)) <= _ABSORBED_TOL * css
+            absorbed[j] = _isconstant(css, raw.ss[j]) ||
+                          sum(abs2, view(Xt, :, j)) <= _ABSORBED_TOL * css
         elseif !(intercept && j == 1)
-            absorbed[j] = raw.ss[j] == 0 || (intercept && css == 0)
+            absorbed[j] = raw.ss[j] == 0 || (intercept && _isconstant(css, raw.ss[j]))
         end
     end
     return absorbed

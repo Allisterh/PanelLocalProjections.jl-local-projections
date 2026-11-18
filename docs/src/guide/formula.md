@@ -29,12 +29,25 @@ Functions of columns work inside the response, e.g. `leads(100 * log(y))`.
   ``a ≥ 0`` gives ``x_{t-a}, …, x_{t-b}``. They also apply to interactions,
   `lags(s & X, 1)`, and to first differences, `lags(firstdiff(y), 1:4)` (named `L1.D.y`).
 - First differences: `firstdiff(x)`, named `D.x`.
+- Leads: `leads(x, a:b)` gives ``x_{t+a}, …, x_{t+b}`` at every horizon, named `F1.x`, ….
+  `leads(x)` without a range is the *path* of `x` between the shock and the response:
+  ``x_{t+1}, …, x_{t+h}`` at horizon ``h`` and nothing at ``h ≤ 0``. The coefficient of
+  ``x_t`` is then the response to `x` at ``t`` holding its later values fixed (Ilzetzki
+  2024; Dube, Girardi, Jordà & Taylor 2025, Section 4.3). A path term is an exogenous
+  regressor of its own: it cannot be nested in another term or in an IV block. See
+  [Lead paths and negative horizons](../methods/leads.md).
 - Fixed effects: `fe(id)`, `fe(t)`, and interactions such as `fe(sector) & fe(quarter)`.
   They are absorbed, not estimated.
 - An intercept is included when there are no fixed effects, unless the formula has `0 +`.
+- Panel LP-IV: one block `(endo ~ inst)`, e.g. `(s & ffr ~ s & mp)`, with the endogenous
+  regressors on its left (listed first among the coefficients, and the default shock) and
+  the excluded instruments on its right. With `WithinFE` or `LagAugmented`. See
+  [Panel LP-IV](../methods/lpiv.md).
 
-Categorical regressors are not supported in v0.1: absorb them with `fe()` or build dummy
-columns. Panel LP-IV (`(endo ~ inst)`) is planned for v0.2.
+Shifts compose: `lags(lags(x, 1), 1)` is `lags(x, 2:2)` and `firstdiff(lags(x, 2:2))` is
+`lags(firstdiff(x), 2:2)`, also where the intermediate period is absent from the data.
+
+Categorical regressors are not supported: absorb them with `fe()` or build dummy columns.
 
 ## The shock
 

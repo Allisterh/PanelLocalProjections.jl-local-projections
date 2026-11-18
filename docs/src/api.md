@@ -14,6 +14,9 @@ CappedLags
 ConstantLags
 LagSelection
 lagorder
+LPDiD
+averageeffect
+pretrendtest
 AlternatingProjections
 OneSweep
 ```
@@ -34,6 +37,7 @@ fe
 
 ```@docs
 Robust
+Homoskedastic
 Clustered
 DriscollKraaySE
 TLAHR

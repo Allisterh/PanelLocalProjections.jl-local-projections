@@ -68,10 +68,13 @@ lags of the outcome are exogenous. So the fit at horizon h depends on p(h) only.
 function _with_lags(d::PanelDesign, ctx::_EvalContext, pmax::Int)
     pmax == 0 && return d
     lv = _lagvar(d.response)
-    vars = [(only(_names(lv)), _col1(lv, ctx), Float64[], Float64[], false)]
+    # the lag ℓ of a column is its formula term evaluated ℓ periods earlier (`_cols` with
+    # an offset), not the built column read at the row of t − ℓ, which may be absent
+    lagged(t, c) = l -> _cols(t, ctx, -l)[:, c]
+    vars = Any[(only(_names(lv)), lagged(lv, 1), Float64[], Float64[], false)]
     for j in d.shockcols
-        push!(vars, (
-            d.coefnames[j], d.X[:, j], d.exposures[j], d.aggseries[j], j in d.endo))
+        push!(vars, (d.coefnames[j], lagged(d.colterm[j]...), d.exposures[j],
+            d.aggseries[j], j in d.endo))
     end
     cols = Vector{Float64}[]
     names = String[]
@@ -84,7 +87,7 @@ function _with_lags(d::PanelDesign, ctx::_EvalContext, pmax::Int)
         lname = string("L", l, ".", _wrap(nm))
         (lname in d.coefnames || lname in names) && continue
         shift = _shift(d.pidx, -l)
-        x = _gather(v, shift)
+        x = v(l)
         (any(j -> _samecol(x, view(d.X, :, j)), axes(d.X, 2)) ||
          any(c -> _samecol(x, c), cols)) && continue
         push!(cols, x)
@@ -103,7 +106,7 @@ function _with_lags(d::PanelDesign, ctx::_EvalContext, pmax::Int)
 
             (d.zlagorder[k] == 0 && l in endolags) || continue
             shift = _shift(d.pidx, -l)
-            x = _gather(view(d.Z, :, k), shift)
+            x = _cols(d.zterm[k][1], ctx, -l)[:, d.zterm[k][2]]
             (any(c -> _samecol(x, view(d.Z, :, c)), axes(d.Z, 2)) ||
              any(c -> _samecol(x, c), zc)) && continue
             push!(zc, x)
@@ -124,7 +127,10 @@ function _with_lags(d::PanelDesign, ctx::_EvalContext, pmax::Int)
         hcat(d.X, reduce(hcat, cols)), coefnames, d.shockcols, d.intercept, d.rhsok, d.fe,
         d.fenames, d.groups, d.groupnames, d.ngroups, d.subset, vcat(d.aggseries, lagagg),
         exposures, _owners(coefnames, d.shockcols, exposures), d.timefe,
-        vcat(d.lagorder, order), endo, Z, instnames, zlag, zagg, zexp)
+        vcat(d.lagorder, order), endo, Z, instnames, zlag, zagg, zexp,
+        vcat(d.leadorder, zeros(Int, length(names))), d.weights,
+        vcat(d.colterm, Any[nothing for _ in names]),
+        vcat(d.zterm, Any[nothing for _ in (length(d.zterm) + 1):length(instnames)]))
 end
 
 """
@@ -171,7 +177,9 @@ function _reducedform(d::PanelDesign)
         d.ngroups, d.subset, vcat(d.aggseries[lead], d.zaggseries, d.aggseries[exo]),
         exposures, _owners(coefnames, shockcols, exposures), d.timefe,
         vcat(d.lagorder[lead], d.zlagorder, d.lagorder[exo]), Int[],
-        zeros(size(d.X, 1), 0), String[], Int[], Vector{Float64}[], Vector{Float64}[])
+        zeros(size(d.X, 1), 0), String[], Int[], Vector{Float64}[], Vector{Float64}[],
+        vcat(d.leadorder[lead], zeros(Int, L), d.leadorder[exo]), d.weights,
+        vcat(d.colterm[lead], d.zterm, d.colterm[exo]), Any[])
 end
 
 # `mask` restricted to the rows where the lags of horizon h are defined.
@@ -253,10 +261,12 @@ function _lagrule(r::ICLags, d::PanelDesign, ctx::_EvalContext, base::BitVector,
     counted(j) = da.lagorder[j] > 0 &&
                  (r.vars === :outcome_and_shock ||
                   da.coefnames[j] == string("L", da.lagorder[j], ".", _wrap(vname)))
-    # candidate p: the formula's columns, and the counted lags up to p
+    # candidate p: the formula's columns (without the leads of a path term, which the
+    # h = 0 regression does not have), and the counted lags up to p
     candidate(p) = [j
                     for j in eachindex(da.lagorder)
-                    if da.lagorder[j] == 0 || (da.lagorder[j] <= p && counted(j))]
+                    if da.leadorder[j] == 0 &&
+        (da.lagorder[j] == 0 || (da.lagorder[j] <= p && counted(j)))]
     rowsok(p) = reduce(
         .&, (isfinite.(view(da.X, :, j)) for j in candidate(p)
         if da.lagorder[j] > 0);

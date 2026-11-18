@@ -7,6 +7,7 @@
 
 # Keyword constructors; the inner constructors in types.jl validate every field.
 Robust(; ssc::Symbol = :stata) = Robust(ssc)
+Homoskedastic(; ssc::Symbol = :stata) = Homoskedastic(ssc)
 
 function Clustered(dims...; ssc::Symbol = :stata, psd = length(dims) == 2)
     1 <= length(dims) <= 2 ||
@@ -57,6 +58,7 @@ function _dk_lags(s::DriscollKraaySE, T::Int)
 end
 
 _label(s::Robust) = "Robust(ssc = :$(s.ssc))"
+_label(s::Homoskedastic) = "Homoskedastic(ssc = :$(s.ssc))"
 function _label(s::Clustered)
     "Clustered($(join(repr.(s.dims), ", ")); ssc = :$(s.ssc)$(s.psd === :none || length(s.dims) == 1 ? "" : ", psd = :$(s.psd)"))"
 end
@@ -139,6 +141,30 @@ function _vcov_parts(s::Robust, r, fit::HorizonFit, ::Nothing)
     c, df = s.ssc === :none ? (1.0, Inf) : (n / dfr, Float64(dfr))
     c = _finite_or_nan(c, defined)
     return fit.scores.Mobs, c, defined ? df : NaN, VcovInfo(c, 0, 0, 0, false)
+end
+
+# The classical variance is σ̂² times the bread, not a sandwich: it needs the residual sum
+# of squares of an ordinary (or two-stage) least-squares fit.
+function _prepare(s::Homoskedastic, r::PanelLocalProjection)
+    r.estimator isa SplitPanelJackknife && throw(ArgumentError(
+        "Homoskedastic is the classical variance of a least-squares fit; the split-panel " *
+        "jackknife has none: use Clustered or DriscollKraaySE"))
+    any(f -> f.did !== nothing && f.did.ra, r.fits) && throw(ArgumentError(
+        "Homoskedastic is not defined for a regression-adjustment LP-DiD fit, whose " *
+        "scores are its influence function: use Clustered(:unit; ssc = :none)"))
+    return nothing
+end
+
+function _sandwich(s::Homoskedastic, r, fit::HorizonFit, ctx, kidx::Vector{Int})
+    n, k, dfa = fit.dof.nobs, fit.dof.k, fit.dof.df_a
+    dfr = n - k - dfa
+    nk = length(kidx)
+    dfr > 0 ||
+        return fill(NaN, nk, nk), fill(NaN, nk), VcovInfo(NaN, 0, 0, 0, false), :undefined
+    σ2, df, c = s.ssc === :none ? (fit.rss / n, Inf, 1.0) :
+                (fit.rss / dfr, Float64(dfr), n / dfr)
+    V = σ2 .* fit.bread[kidx, kidx]
+    return (V + V') ./ 2, fill(df, nk), VcovInfo(c, 0, 0, 0, false), :ok
 end
 
 function _vcov_parts(s::Clustered, r, fit::HorizonFit, gs::Vector{Int})
@@ -256,6 +282,10 @@ function _prepare(s::TLAHR, r::PanelLocalProjection)
             "TLAHR(refine = true) is not available for panel LP-IV yet (Almuzara & Sancibrián " *
             "define the refinement for OLS only); TLAHR(refine = false) is their LP-IV " *
             "variance, CR0 by period on the IV scores (supplement A.4)"))
+    s.refine && r.weights !== nothing &&
+        throw(ArgumentError(
+            "TLAHR(refine = true) is not available for weighted fits (the synthetic " *
+            "regression is defined for the unweighted one); use TLAHR(refine = false)"))
     if s.refine
         for f in r.fits
             f.status === :ok || continue
@@ -512,7 +542,7 @@ function firststage(r::PanelLocalProjection; vcov::PanelVcov = TLAHR(refine = fa
         throw(ArgumentError("firststage needs a panel LP-IV result (an (endo ~ inst) block)"))
     ctx = _prepare(vcov, r)
     H = length(r.fits)
-    kpF, effF, rk = fill(NaN, H), fill(NaN, H), fill(NaN, H)
+    kpF, effF, rk, cdF = fill(NaN, H), fill(NaN, H), fill(NaN, H), fill(NaN, H)
     ninst, nendo, nobs = zeros(Int, H), zeros(Int, H), zeros(Int, H)
     endos, insts = [String[] for _ in 1:H], [String[] for _ in 1:H]
     coefs, ses = [zeros(0, 0) for _ in 1:H], [zeros(0, 0) for _ in 1:H]
@@ -526,6 +556,7 @@ function firststage(r::PanelLocalProjection; vcov::PanelVcov = TLAHR(refine = fa
         endos[k] = r.coefnames[fs.endo]
         insts[k] = r.instruments[fs.inst]
         coefs[k] = fs.coef
+        cdF[k] = _craggdonald(fs, fit.dof.nobs - (fit.dof.k - m + L) - fit.dof.df_a)
         Lm = L * m
         # the first stage's regressors: the structural ones less the endogenous, plus the
         # excluded instruments
@@ -534,7 +565,8 @@ function firststage(r::PanelLocalProjection; vcov::PanelVcov = TLAHR(refine = fa
             dv.ngroups, dv.nested, dv.singletons)
         pfit = HorizonFit(fit.h, :ok, vec(fs.coef), trues(Lm), falses(Lm), fs.bread,
             ones(Lm), fit.esample, fit.timepresent, dof, fs.scores, fit.iterations,
-            fit.converged, trues(Lm), fit.nlags, SyntheticSeries[], falses(0), nothing)
+            fit.converged, trues(Lm), fit.nlags, SyntheticSeries[], falses(0), nothing,
+            NaN, NaN, nothing)
         V, _, _, flag = _sandwich(vcov, r, pfit, ctx, collect(1:Lm))
         if flag === :undefined || flag === :bandwidth || !all(isfinite, V)
             push!(undefined, fit.h)
@@ -544,7 +576,7 @@ function firststage(r::PanelLocalProjection; vcov::PanelVcov = TLAHR(refine = fa
         rk[k] = _kprk(fs, V, fit.dof.nobs)
         isnan(rk[k]) && push!(undefined, fit.h)
         kpF[k] = rk[k] / L
-        if m == 1
+        if m == 1 && isfinite(rk[k])
             π = vec(fs.coef)
             den = LinearAlgebra.tr(V * fs.zz)
             effF[k] = den > 0 ? (π' * fs.zz * π) / den : NaN
@@ -553,7 +585,7 @@ function firststage(r::PanelLocalProjection; vcov::PanelVcov = TLAHR(refine = fa
     isempty(undefined) || @warn "firststage: $(_label(vcov)) is undefined, or the " *
           "variance of the first stage is not positive definite, at " *
           "h = $(_hlist(sort!(unique(undefined)))); the statistics are NaN there"
-    return FirstStageSummary(_label(vcov), collect(r.horizons), kpF, effF, rk, ninst,
+    return FirstStageSummary(_label(vcov), collect(r.horizons), kpF, effF, rk, cdF, ninst,
         nendo, nobs, endos, insts, coefs, ses)
 end
 
@@ -565,10 +597,43 @@ end
 # transformations of U₂ and V₂, which leave the Wald statistic unchanged. With A = U₂ and
 # B = V₂' there is nothing to invert, also when U₂₂ or V₂₂ is singular (tied singular
 # values, e.g. group dummies × an aggregate with a diagonal Π̂).
+# Whether a cross-product matrix, scaled to unit diagonal, has a reciprocal condition
+# number above 1e-10: below it, statistics that go through its normal equations (the
+# first-stage diagnostics) have no correct digits.
+function _wellconditioned(A::Matrix{Float64})
+    d = sqrt.(LinearAlgebra.diag(A))
+    all(x -> x > 0 && isfinite(x), d) || return false
+    ev = LinearAlgebra.eigvals(LinearAlgebra.Symmetric(A ./ (d * d')))
+    return first(ev) > 1e-10 * last(ev)
+end
+
+# Cragg–Donald (1993) Wald F of the first stage, the weak-identification statistic under
+# homoskedastic errors (ivreg2's `widstat` without `robust` or `cluster`): λ_min·dfr/L,
+# with λ_min the smallest eigenvalue of (E'M_Z E)⁻¹ E'P_Z E for the endogenous regressors
+# E and the excluded instruments Z, both net of the fixed effects and the exogenous
+# regressors (E'P_Z E = Π̂'Z̃'Z̃Π̂), L the number of excluded instruments and `dfr` the
+# residual degrees of freedom of the first stage.
+function _craggdonald(fs::FirstStage, dfr::Int)
+    L = size(fs.coef, 1)
+    (dfr > 0 && _wellconditioned(fs.zz)) || return NaN
+    P = LinearAlgebra.Symmetric(fs.coef' * fs.zz * fs.coef)
+    M = LinearAlgebra.Symmetric(fs.yy .- P)
+    C = LinearAlgebra.cholesky(M; check = false)
+    LinearAlgebra.issuccess(C) || return NaN
+    λ = LinearAlgebra.eigvals(LinearAlgebra.Symmetric(C.L \ Matrix(P) / C.L'))
+    return first(λ) * dfr / L
+end
+
 function _kprk(fs::FirstStage, V::Matrix{Float64}, n::Int)
     L, m = size(fs.coef)
-    Lz = LinearAlgebra.cholesky(LinearAlgebra.Symmetric(fs.zz ./ n)).L
-    Ly = LinearAlgebra.cholesky(LinearAlgebra.Symmetric(fs.yy ./ n)).L
+    # nearly collinear instruments that the first stage keeps can leave Z̃'Z̃ numerically
+    # indefinite, or so ill-conditioned that the statistic is noise: undefined (NaN), with
+    # the warning of `firststage`, never an exception
+    (_wellconditioned(fs.zz) && _wellconditioned(fs.yy)) || return NaN
+    Cz = LinearAlgebra.cholesky(LinearAlgebra.Symmetric(fs.zz ./ n); check = false)
+    Cy = LinearAlgebra.cholesky(LinearAlgebra.Symmetric(fs.yy ./ n); check = false)
+    (LinearAlgebra.issuccess(Cz) && LinearAlgebra.issuccess(Cy)) || return NaN
+    Lz, Ly = Cz.L, Cy.L
     iLy = inv(Ly)
     Θ = Lz' * fs.coef * iLy'
     F = LinearAlgebra.svd(Θ; full = true)

@@ -29,8 +29,8 @@ esample(r::PanelLocalProjection, h::Integer) = _fit(r, h).esample
 The synthetic time series of coefficient `term` at horizon `h` (Almuzara & Sancibrián
 2026, Remark 1): per period of the sample, the weighted cross-sectional averages
 Σ_i w_i z_it / Σ_i w_i² of the within-transformed regressor `term` (`x`), response (`y`)
-and residuals (`resid`), and the weight ω_t = Σ_i w_i² (`weight`, 0 for a period without
-weight, whose averages are NaN). The weights are those of the synthetic regression that
+and residuals (`resid`), and the weight ω_t = Σ_i w_i² (`weight`; 0 for a period without
+weight, where `y` and `resid` are NaN and `x` is 0). The weights are those of the synthetic regression that
 the [`TLAHR`](@ref) refinement of `term` uses: the exposure of `term` for a shock (or
 another aggregate series times an exposure), of its shock for a lag of a shock, of the
 first shock otherwise, residualised per period (`weights = :raw`: the raw exposure, for
@@ -136,7 +136,7 @@ Tables.columnnames(s::IRFSummary) = (:horizon, :coef, :se, :lower, :upper, :df, 
 Tables.getcolumn(s::IRFSummary, nm::Symbol) = getproperty(Tables.columns(s), nm)
 Tables.getcolumn(s::IRFSummary, i::Int) = Tables.columns(s)[i]
 
-_fmt(x::Real) = isnan(x) ? "NaN" : Printf.@sprintf("%.6g", x)
+_fmt(x::Real) = isnan(x) ? "NaN" : iszero(x) ? "0" : Printf.@sprintf("%.6g", x)
 _fmtdf(x::Real) = isinf(x) ? "∞" : isnan(x) ? "NaN" : Printf.@sprintf("%.4g", x)
 
 function Base.show(io::IO, ::MIME"text/plain", s::IRFSummary)
@@ -158,8 +158,12 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", r::PanelLocalProjection{E}) where {E}
     p = r.panel
-    println(io, "Panel local projection ($(nameof(E))), horizons $(r.horizons)")
+    println(io, "Panel local projection ($(nameof(E))), ",
+        isempty(r.pooled) ? "horizons $(r.horizons)" :
+        "pooled over horizons $(r.pooled)")
     println(io, "  response: ", r.response)
+    r.estimator isa LPDiD && println(io, "  estimator: ", _label(r.estimator))
+    r.weights === nothing || println(io, "  weights:  ", r.weights)
     println(io, "  shock:    ", join(r.shocks, ", "))
     println(io, "  regressors: ", join(r.coefnames, ", "))
     isempty(r.endogenous) || println(io, "  instrumented: ", join(r.endogenous, ", "),
@@ -180,7 +184,9 @@ function Base.show(io::IO, ::MIME"text/plain", r::PanelLocalProjection{E}) where
 end
 
 function Base.show(io::IO, r::PanelLocalProjection{E}) where {E}
-    print(io, "PanelLocalProjection{$(nameof(E))}($(r.response), horizons $(r.horizons))")
+    print(io, "PanelLocalProjection{$(nameof(E))}($(r.response), ",
+        isempty(r.pooled) ? "horizons $(r.horizons)" : "pooled over horizons $(r.pooled)",
+        ")")
 end
 
 function Base.show(io::IO, cv::PanelLPVcov)
@@ -190,20 +196,22 @@ end
 Tables.istable(::Type{FirstStageSummary}) = true
 Tables.columnaccess(::Type{FirstStageSummary}) = true
 function Tables.columns(s::FirstStageSummary)
-    (horizon = s.horizon, kpF = s.kpF, effF = s.effF, rk = s.rk, ninst = s.ninst,
-        nendo = s.nendo, nobs = s.nobs)
+    (horizon = s.horizon, kpF = s.kpF, effF = s.effF, rk = s.rk, cdF = s.cdF,
+        ninst = s.ninst, nendo = s.nendo, nobs = s.nobs)
 end
 function Tables.columnnames(::FirstStageSummary)
-    (:horizon, :kpF, :effF, :rk, :ninst, :nendo, :nobs)
+    (:horizon, :kpF, :effF, :rk, :cdF, :ninst, :nendo, :nobs)
 end
 Tables.getcolumn(s::FirstStageSummary, nm::Symbol) = getproperty(Tables.columns(s), nm)
 Tables.getcolumn(s::FirstStageSummary, i::Int) = Tables.columns(s)[i]
 
 function Base.show(io::IO, ::MIME"text/plain", s::FirstStageSummary)
     println(io, "First stage of the panel LP-IV; variance: $(s.spec)")
-    hdr = ["h", "KP rk Wald F", "effective F", "instruments", "endogenous", "nobs"]
-    rows = [[string(s.horizon[i]), _fmt(s.kpF[i]), _fmt(s.effF[i]), string(s.ninst[i]),
-                string(s.nendo[i]), string(s.nobs[i])] for i in eachindex(s.horizon)]
+    hdr = ["h", "KP rk Wald F", "effective F", "Cragg–Donald F", "instruments",
+        "endogenous", "nobs"]
+    rows = [[string(s.horizon[i]), _fmt(s.kpF[i]), _fmt(s.effF[i]), _fmt(s.cdF[i]),
+                string(s.ninst[i]), string(s.nendo[i]), string(s.nobs[i])]
+            for i in eachindex(s.horizon)]
     w = [maximum(length, [hdr[c]; [row[c] for row in rows]]) for c in eachindex(hdr)]
     println(io, join(lpad.(hdr, w), "  "))
     for (i, row) in enumerate(rows)

@@ -78,8 +78,21 @@ function _select_shocks(shock, coefnames, regs)
     return idx
 end
 
+# Observation weights: a numeric column; rows with a missing or zero weight leave the
+# sample (as in Stata), a negative weight is an error.
+function _weights(weights, column)
+    weights === nothing && return Float64[]
+    weights isa Union{Symbol, AbstractString} || throw(ArgumentError(
+        "weights must be a column name; got $(repr(weights))"))
+    c = column(Symbol(weights))
+    _isnumericcol(c) || throw(ArgumentError("the weights column :$weights is not numeric"))
+    w = _nanfloat(c)
+    any(<(0), w) && throw(ArgumentError("the weights column :$weights has negative values"))
+    return w
+end
+
 function _build_design(f::StatsModels.FormulaTerm, data; id::Symbol, time::Symbol,
-        frequency, subset, clusters, shock)
+        frequency, subset, clusters, shock, weights = nothing, hmax::Int = 0)
     cols = Tables.columns(data)
     pidx = PanelIndex(_getcol(cols, id), _getcol(cols, time); frequency = frequency)
     n = nrows(pidx)
@@ -94,6 +107,11 @@ function _build_design(f::StatsModels.FormulaTerm, data; id::Symbol, time::Symbo
     response = _rewrite_lhs(f.lhs)
     regs, fes, ireq, iv = _rewrite_rhs(f.rhs)
     endoterms, instterms = iv === nothing ? (Any[], Any[]) : iv
+    # a path term leads(x) is the leads 1, …, hmax of x; lead ℓ enters at horizons h ≥ ℓ
+    ispath = [t isa LeadsTerm && t.leads === nothing for t in regs]
+    regs = Any[p ? LeadsTerm(t.term, 1:hmax) : t for (t, p) in zip(regs, ispath)]
+    keepreg = [!(p && hmax < 1) for p in ispath]
+    regs, ispath = regs[keepreg], ispath[keepreg]
     _width1(response.term, "the response")
     response isa AnchorResponse && _width1(response.base, "the anchor of anchor(y, z)")
 
@@ -106,7 +124,7 @@ function _build_design(f::StatsModels.FormulaTerm, data; id::Symbol, time::Symbo
     for v in vars
         c = column(v)
         _isnumericcol(c) || throw(ArgumentError(
-            "column :$v is not numeric. Categorical regressors are not supported in v0.1: " *
+            "column :$v is not numeric. Categorical regressors are not supported: " *
             "absorb them with fe($v) or build dummy columns"))
         columns[v] = _nanfloat(c)
     end
@@ -118,17 +136,23 @@ function _build_design(f::StatsModels.FormulaTerm, data; id::Symbol, time::Symbo
     blocks = Matrix{Float64}[]
     coefnames = String[]
     termof = Tuple{Int, Int}[]               # per column: (term, column within the term)
+    leadorder = Int[]
     if intercept
         push!(blocks, ones(n, 1))
         push!(coefnames, "(Intercept)")
         push!(termof, (0, 1))
+        push!(leadorder, 0)
     end
     # the endogenous regressors first, as ivreghdfe lists them
     allregs = vcat(endoterms, regs)
+    pathterm = vcat(falses(length(endoterms)), ispath)
     for (k, t) in enumerate(allregs)
         push!(blocks, _cols(t, ctx))
         append!(coefnames, _names(t))
         append!(termof, ((k, c) for c in 1:size(blocks[end], 2)))
+        append!(leadorder,
+            pathterm[k] ? [l for l in t.leads for _ in 1:length(_names(t.term))] :
+            zeros(Int, size(blocks[end], 2)))
     end
     isempty(blocks) && throw(ArgumentError("the formula has no regressors"))
     X = reduce(hcat, blocks)
@@ -142,7 +166,13 @@ function _build_design(f::StatsModels.FormulaTerm, data; id::Symbol, time::Symbo
     any(j -> coefnames[j] == "(Intercept)", shockcols) &&
         throw(ArgumentError("the intercept cannot be the shock"))
 
-    rhsok = BitVector([_rowfinite(X, r) && _rowfinite(Z, r) for r in 1:n])
+    # rows where the regressors of every horizon are defined (the leads of a path term are
+    # checked at the horizons that use them, `_leadmask!`)
+    fixedcols = findall(==(0), leadorder)
+    rhsok = BitVector([all(j -> isfinite(X[r, j]), fixedcols) && _rowfinite(Z, r)
+                       for r in 1:n])
+    wts = _weights(weights, column)
+    isempty(wts) || (rhsok .&= isfinite.(wts) .& (wts .> 0))
 
     # Codes of a fixed-effect or cluster variable: the panel's own unit and period codes
     # for the id and time columns (so that dates group by period, as in leads and lags),
@@ -205,7 +235,10 @@ function _build_design(f::StatsModels.FormulaTerm, data; id::Symbol, time::Symbo
         shockcols, intercept, rhsok, fecodes, fenames, groups, groupnames, ngroups,
         _subsetmask(subset, cols, n), aggseries, exposures,
         _owners(coefnames, shockcols, exposures), timefe, zeros(Int, length(coefnames)),
-        endo, Z, instnames, zeros(Int, length(instnames)), first.(zexps), last.(zexps))
+        endo, Z, instnames, zeros(Int, length(instnames)), first.(zexps), last.(zexps),
+        leadorder, wts,
+        Any[k == 0 ? nothing : (allregs[k], c) for (k, c) in termof],
+        Any[(t, c) for t in instterms for c in 1:length(_names(t))])
 end
 
 # The excluded instruments of an IV block, evaluated on the panel (n × 0 without one),

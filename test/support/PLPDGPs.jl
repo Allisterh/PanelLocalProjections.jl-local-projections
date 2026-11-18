@@ -377,6 +377,135 @@ function fx_lpiv_unbal()
 end
 
 """
+`fx_lpdid`: a difference-in-differences panel for LP-DiD (Dube, Girardi, Jordà & Taylor
+2025), N = 60, T = 30, with three binary treatments and their outcomes on a common
+untreated path:
+
+    x_it   = 0.5 x_{i,t-1} + ex_it                        covariate
+    u_it   = 0.5 u_{i,t-1} + e_it
+    y0_it  = μ_i + λ_t + 0.02 r_i t + 0.5 x_it + u_it     untreated outcome (region trends)
+
+- `d`: absorbing, staggered. Cohorts enter at t = 8, 11, 14, 17, 20, 23 (unit i in cohort
+  mod(i-1, 7) + 1; the seventh is never treated; `g` is the entry period, 0 for never).
+  `y = y0 + (1 + 0.3 k)(1 + 0.25 c)` at k = t − g ≥ 0, c the cohort index: effects grow
+  with the time since treatment and differ across cohorts.
+- `d2`: non-absorbing and persistent. An untreated unit enters with probability 0.07 per
+  period (from t = 4), a treated one exits with probability 0.10 once treated for 3
+  periods. `y2 = y0 + a_it`, a_it = a_{i,t-1} + 0.5 (2 d2_it − a_{i,t-1}): the effect
+  converges to 2 after an entry and to 0 after an exit.
+- `d3`: one-off events with probability 0.06 per period (from t = 3).
+  `y3 = y0 + Σ_{s ≤ t} 1.5 · 0.6^{t−s} d3_is`.
+
+`xb` = 1{μ_i > 0} is a binary unit-level covariate, `w` ∈ (0.5, 2) a unit-level weight,
+`reg = mod(id-1, 4) + 1` (r_i = reg − 2.5) and `st = mod(id-1, 12) + 1` a coarser cluster.
+"""
+function fx_lpdid(; seed = 20261117, N = 60, T = 30)
+    rng = StableRNG(seed)
+    TT = BURNIN + T
+    λ = zeros(TT)
+    for t in 1:TT
+        λ[t] = 0.3 * randn(rng)
+    end
+    entries = (8, 11, 14, 17, 20, 23, 0)
+    names = ("y", "y2", "y3", "x", "w")
+    cols = Dict(k => Float64[] for k in names)
+    ints = Dict(k => Int[] for k in ("id", "t", "g", "reg", "st", "d", "d2", "d3", "xb"))
+    for i in 1:N
+        μ = randn(rng)
+        wi = 0.5 + 1.5 * rand(rng)
+        c = mod(i - 1, 7) + 1
+        g = entries[c]
+        reg = mod(i - 1, 4) + 1
+        xp = 0.0
+        up = 0.0
+        d2 = 0
+        spell = 0
+        a2 = 0.0
+        a3 = 0.0
+        for k in 1:TT
+            xk = 0.5 * xp + randn(rng)
+            uk = 0.5 * up + randn(rng)
+            p2 = rand(rng)
+            p3 = rand(rng)
+            t = k - BURNIN
+            if t >= 4
+                if d2 == 0
+                    p2 < 0.07 && (d2 = 1; spell = 0)
+                elseif spell >= 3 && p2 < 0.10
+                    d2 = 0
+                end
+            end
+            d2 == 1 && (spell += 1)
+            d3 = t >= 3 && p3 < 0.06 ? 1 : 0
+            a2 = a2 + 0.5 * (2 * d2 - a2)
+            a3 = 0.6 * a3 + 1.5 * d3
+            if t >= 1
+                y0 = μ + λ[k] + 0.02 * (reg - 2.5) * t + 0.5 * xk + uk
+                d = g > 0 && t >= g ? 1 : 0
+                eff = d == 1 ? (1 + 0.3 * (t - g)) * (1 + 0.25 * c) : 0.0
+                push!(ints["id"], i)
+                push!(ints["t"], t)
+                push!(ints["g"], g)
+                push!(ints["reg"], reg)
+                push!(ints["st"], mod(i - 1, 12) + 1)
+                push!(ints["d"], d)
+                push!(ints["d2"], d2)
+                push!(ints["d3"], d3)
+                push!(ints["xb"], μ > 0 ? 1 : 0)
+                push!(cols["y"], y0 + eff)
+                push!(cols["y2"], y0 + a2)
+                push!(cols["y3"], y0 + a3)
+                push!(cols["x"], xk)
+                push!(cols["w"], wi)
+            end
+            xp, up = xk, uk
+        end
+    end
+    return Pair{String, Vector}[
+        "id" => ints["id"], "t" => ints["t"], "g" => ints["g"], "reg" => ints["reg"],
+        "st" => ints["st"], "d" => ints["d"], "d2" => ints["d2"], "d3" => ints["d3"],
+        "x" => cols["x"], "xb" => ints["xb"], "w" => cols["w"], "y" => cols["y"],
+        "y2" => cols["y2"], "y3" => cols["y3"]]
+end
+
+"""
+`fx_lpdid_unbal`: `fx_lpdid` with a ragged start (a third of the units enter at
+t ∈ 2..7), about 4% of the remaining rows removed at random (gaps), and missing values in
+about 2% of the cells of `y`, `y2`, `y3` (together), 1% of each treatment and 1% of `x`.
+"""
+function fx_lpdid_unbal()
+    cols = fx_lpdid()
+    rng = StableRNG(13)
+    N = 60
+    entry = [mod(i, 3) == 0 ? 2 + floor(Int, 6 * rand(rng)) : 1 for i in 1:N]
+    id = _col(cols, "id")
+    t = _col(cols, "t")
+    n = length(id)
+    keep = trues(n)
+    holes = zeros(n, 5)
+    for r in 1:n
+        u = rand(rng)   # one draw per row and use keeps the stream aligned
+        keep[r] = t[r] >= entry[id[r]] && u >= 0.04
+        for k in 1:5
+            holes[r, k] = rand(rng)
+        end
+    end
+    blank(name, k, p) = Union{Missing, eltype(_col(cols, name))}[holes[r, k] < p ? missing :
+                                                                 v
+                                                                 for (r, v) in enumerate(_col(cols, name))]
+    out = Pair{String, Vector}[]
+    for (name, v) in cols
+        v2 = name in ("y", "y2", "y3") ? blank(name, 1, 0.02) :
+             name == "d" ? blank(name, 2, 0.01) :
+             name == "d2" ? blank(name, 3, 0.01) :
+             name == "d3" ? blank(name, 4, 0.01) :
+             name == "x" ? blank(name, 5, 0.01) : v
+        push!(out, name => v2)
+    end
+    return _select(out, keep)
+end
+
+"""
     mss_toy(rng; N = 30, T = 60, ρ = 0.8, β = -0.6, δ = 0.2, η = 0.2)
 
 One draw of the Mei–Sheng–Shi (2026) main-text Monte Carlo design (their `simul_LP.R`,
@@ -473,7 +602,8 @@ end
 "Name → generator for every committed synthetic fixture."
 const FIXTURES = (fx_balanced = fx_balanced, fx_unbalanced = fx_unbalanced,
     fx_dated = fx_dated, fx_cdols = fx_cdols, fx_tlahr = fx_tlahr,
-    fx_tlahr_unbal = fx_tlahr_unbal, fx_lpiv = fx_lpiv, fx_lpiv_unbal = fx_lpiv_unbal)
+    fx_tlahr_unbal = fx_tlahr_unbal, fx_lpiv = fx_lpiv, fx_lpiv_unbal = fx_lpiv_unbal,
+    fx_lpdid = fx_lpdid, fx_lpdid_unbal = fx_lpdid_unbal)
 
 make_fixture(name::Symbol) = getfield(FIXTURES, name)()
 
