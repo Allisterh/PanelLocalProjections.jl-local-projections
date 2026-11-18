@@ -4,7 +4,7 @@ Ilzetzki (2024, *American Economic Review*) estimates the response of aircraft p
 productivity to demand in World War II by panel LP-IV: 143 production lines, monthly,
 1940–1945, with the output of a line instrumented by the output of the other lines of its
 broad aircraft type. Two features of his regressions are general options of `panellp`
-since v0.3 ([Lead paths and negative horizons](../methods/leads.md)):
+since v0.2.1 ([Lead paths and negative horizons](../methods/leads.md)):
 
 - **pre-trends**: the loop runs from a negative horizon (``h = -6`` in his Figure A.4,
   ``-1`` elsewhere), with the outcome ``y_{i,t+h} - y_{i,t-1}`` at every ``h``;
