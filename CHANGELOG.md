@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (unreleased): LP-DiD, negative horizons, lead paths
+## 0.2.1 (2026-11-18): LP-DiD, negative horizons, lead paths
 
 ### LP-DiD (Dube, Girardi, Jordà & Taylor 2025)
 - `estimator = LPDiD(…)` with the formula `ldiff(y) ~ firstdiff(D) + fe(time)`: the long

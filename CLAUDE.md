@@ -11,7 +11,7 @@ PanelLocalProjections.jl estimates panel local projections: for each horizon h i
 - **Dube–Girardi–Jordà–Taylor (2025, *JAE*):** **LP-DiD**, difference-in-differences by local projections on clean-control samples. Their Stata command is `lpdid` (GPL-3).
 - **Almuzara–Sancibrián (2026):** **t-LAHR** inference. It is time-clustered, lag-augmented and heteroskedasticity-robust, with an HC2 + Imbens–Kolesár df refinement. `starting_idea.md` calls it a "HAR estimator", but it is **not** HAR: Driscoll–Kraay, EWC and unit/two-way clustering are its *comparators*.
 
-The phased roadmap, with exit criteria per phase, is in `TODO.md`. Panel LP-IV is v0.2.0 (Phase 6: 6a IV core 19bf450, 6b lag-augmented IV 91564d3, 6c first-stage diagnostics, a public-data example and the release; design in `docs/notes/design/lpiv_design.md`). LP-DiD, negative horizons, lead paths, weights and pooled fits are v0.3.0 (Phase 7).
+The phased roadmap, with exit criteria per phase, is in `TODO.md`. Panel LP-IV is v0.2.0 (Phase 6: 6a IV core 19bf450, 6b lag-augmented IV 91564d3, 6c first-stage diagnostics, a public-data example and the release; design in `docs/notes/design/lpiv_design.md`). LP-DiD, negative horizons, lead paths, weights and pooled fits are v0.2.1 (Phase 7).
 
 ## Hard rules
 
@@ -69,7 +69,7 @@ Rscript crosscheck/R/<file>.R
 - **Kaimon.** When the `mcp__kaimon__*` tools are available, use the live REPL (session for this repo via `start_session(project_path = …)`, then `ex`) instead of spawning `julia` for exploration. Revise picks up `src/` edits automatically, but a struct change in `src/types.jl` needs `manage_repl(command = "restart")`. Load test-only packages and the fixtures with `pushfirst!(LOAD_PATH, joinpath(pkgdir(PanelLocalProjections), "dev"))` and `include("test/support/PLPDGPs.jl")` (`read_csv`). `run_tests` runs the whole suite, because TestItemRunner ignores its pattern argument.
 - **Scale benchmark:** `julia --project=. -e 'push!(LOAD_PATH, "dev"); include("dev/benchmark_scale.jl")'` (about 70 s; `PLP_BENCH=fe`, `tlahr` or `capped` runs one part, for its own max RSS). Reference for 1.1M rows and 21 horizons: fixed effects 13.9 s, 14 sweeps per horizon, 1.3 GB max RSS; `LagAugmented(ICLags())` 19.6 s and `TLAHR()` 0.8 s, 1.8 GB; `LagAugmented(CappedLags())` 24.5 s, 2.2 GB (Phase 5).
 
-## Architecture (v0.1: Phases 1–5; v0.2: Phase 6, panel LP-IV; v0.3: Phase 7, LP-DiD; see `TODO.md`)
+## Architecture (v0.1: Phases 1–5; v0.2: Phase 6, panel LP-IV; v0.2.1: Phase 7, LP-DiD; see `TODO.md`)
 
 One module and no submodules. Every struct lives in `src/types.jl`. Include order: `utils` → `types` → `panelindex` → `formula` → `design` → `absorb` → `ols` → `scores` → `lagselect` → `estimators` → `panellp` → `vcov` → `summary` → `lpdid` → `plotting`; Makie lives in `ext/`.
 

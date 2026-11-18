@@ -24,7 +24,7 @@ Panel local projections (Jordà 2005): for each horizon ``h``, a panel regressio
   ([replication](replication/ilzetzki2024.md)).
 
 !!! note "Status"
-    Version 0.3.0. The roadmap is in `TODO.md` at the repository root.
+    Version 0.2.1. The roadmap is in `TODO.md` at the repository root.
 
 Fixed-effect absorption, the OLS solver and all variance estimators are implemented in the
 package. Their design takes inspiration from
