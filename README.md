@@ -1,6 +1,8 @@
 # PanelLocalProjections.jl
 
 [![CI](https://github.com/andrerecio/PanelLocalProjections.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/andrerecio/PanelLocalProjections.jl/actions/workflows/CI.yml)
+[![docs: stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://andrearecine.me/PanelLocalProjections.jl/stable/)
+[![docs: dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://andrearecine.me/PanelLocalProjections.jl/dev/)
 
 Panel local projections in Julia. For each horizon `h`, the package estimates a panel
 regression of `y_{i,t+h}` on a shock, and gathers the estimators and inference
@@ -157,7 +159,7 @@ Plots.plot(s)         # the same with Plots.jl (Makie and Plots both export `plo
 
 Small-sample factors, critical values, the Driscoll–Kraay bandwidth and the repair of a
 two-way variance are options of each specification (`ssc`, `psd`, `timelags`); see
-[Inference](docs/src/guide/inference.md).
+[Inference](https://andrearecine.me/PanelLocalProjections.jl/stable/guide/inference/).
 
 ## Usage by method
 
@@ -226,8 +228,8 @@ panellp(@formula(ldiff(y2) ~ firstdiff(D2) + fe(t)), data; id = :id, time = :t,
 Other options: `control = :nevertreated` or `:notyet`, `firsttreat`, `oneoff` (a treatment
 that lasts one period), `untreated_before`, `pmd = k` or `:max` (pre-mean differencing),
 `weights`. It is written from the paper and reproduces the Stata command `lpdid` 1.1.0
-option by option; the [LP-DiD page](docs/src/methods/lpdid.md) has the map between the
-two, and the [audit](docs/src/audit/lpdid.md) the places where they differ (the
+option by option; the [LP-DiD page](https://andrearecine.me/PanelLocalProjections.jl/stable/methods/lpdid/) has the map between the
+two, and the [audit](https://andrearecine.me/PanelLocalProjections.jl/stable/audit/lpdid/) the places where they differ (the
 reweighted estimate on unbalanced panels, among them).
 
 ### Pre-trends and the path of the treatment
@@ -243,7 +245,7 @@ summarize(r, Clustered(:unit))
 firststage(r; vcov = Clustered(:unit))     # Kleibergen–Paap, effective and Cragg–Donald F
 ```
 
-The [replication page](docs/src/replication/ilzetzki2024.md) reproduces his Figure 9 on
+The [replication page](https://andrearecine.me/PanelLocalProjections.jl/stable/replication/ilzetzki2024/) reproduces his Figure 9 on
 the replication data (`singletons = :keep` and `Homoskedastic(ssc = :none)` for the
 published numbers).
 
@@ -281,7 +283,7 @@ standard errors are 1.5 to 2.7 times those clustered by state, and none of the t
 bands excludes zero. The first stage shows the same thing: its Kleibergen–Paap F is about
 2 clustered by period, but 35 robust and 200,000 clustered by state. The shock is
 aggregate, so the effective sample size is the 84 quarters, not the 4,284 state-quarters.
-See the [example page](docs/src/examples/us_states.md) for the details.
+See the [example page](https://andrearecine.me/PanelLocalProjections.jl/stable/examples/us_states/) for the details.
 
 Data: BEA Regional Economic Accounts; Board of Governors of the Federal Reserve System
 (H.15), via FRED; Jarociński & Karadi (2020, *AEJ: Macroeconomics*), updated surprises
@@ -299,32 +301,32 @@ split-panel rule and critical values. The references are the Stata commands `xtl
 `xtivreg2`, `weakivtest`, `harreg` and `lpdid`, R `fixest`, and the authors' own R code (Mei–Sheng–Shi's
 `LP_panel`, Almuzara–Sancibrián's `panel_LP.R`). [`crosscheck/README.md`](crosscheck/README.md)
 maps each reference command to the `panellp` options that reproduce it, and
-[Deviations](docs/src/deviations.md) lists the defaults that differ from a reference.
+[Deviations](https://andrearecine.me/PanelLocalProjections.jl/stable/deviations/) lists the defaults that differ from a reference.
 
 ## Documentation
 
-The pages are in [`docs/src`](docs/src):
+The documentation is at <https://andrearecine.me/PanelLocalProjections.jl/stable/> for the latest release and <https://andrearecine.me/PanelLocalProjections.jl/dev/> for `main`:
 
-- Guide: [getting started](docs/src/guide/example.md), [panel data](docs/src/guide/data.md),
-  [formula](docs/src/guide/formula.md), [inference](docs/src/guide/inference.md).
-- Methods: [fixed-effect absorption](docs/src/methods/absorption.md),
-  [split-panel jackknife](docs/src/methods/spj.md), [CD-OLS](docs/src/methods/cdols.md),
-  [t-LAHR](docs/src/methods/tlahr.md), [panel LP-IV](docs/src/methods/lpiv.md),
-  [lead paths and negative horizons](docs/src/methods/leads.md),
-  [LP-DiD](docs/src/methods/lpdid.md).
-- Example and replications: [US states](docs/src/examples/us_states.md),
-  [Mei, Sheng & Shi](docs/src/replication/mss2026.md),
-  [Ugarte-Ruiz](docs/src/replication/ugarte2026.md),
-  [Ilzetzki](docs/src/replication/ilzetzki2024.md) (on his replication data, not
+- Guide: [getting started](https://andrearecine.me/PanelLocalProjections.jl/stable/guide/example/), [panel data](https://andrearecine.me/PanelLocalProjections.jl/stable/guide/data/),
+  [formula](https://andrearecine.me/PanelLocalProjections.jl/stable/guide/formula/), [inference](https://andrearecine.me/PanelLocalProjections.jl/stable/guide/inference/).
+- Methods: [fixed-effect absorption](https://andrearecine.me/PanelLocalProjections.jl/stable/methods/absorption/),
+  [split-panel jackknife](https://andrearecine.me/PanelLocalProjections.jl/stable/methods/spj/), [CD-OLS](https://andrearecine.me/PanelLocalProjections.jl/stable/methods/cdols/),
+  [t-LAHR](https://andrearecine.me/PanelLocalProjections.jl/stable/methods/tlahr/), [panel LP-IV](https://andrearecine.me/PanelLocalProjections.jl/stable/methods/lpiv/),
+  [lead paths and negative horizons](https://andrearecine.me/PanelLocalProjections.jl/stable/methods/leads/),
+  [LP-DiD](https://andrearecine.me/PanelLocalProjections.jl/stable/methods/lpdid/).
+- Example and replications: [US states](https://andrearecine.me/PanelLocalProjections.jl/stable/examples/us_states/),
+  [Mei, Sheng & Shi](https://andrearecine.me/PanelLocalProjections.jl/stable/replication/mss2026/),
+  [Ugarte-Ruiz](https://andrearecine.me/PanelLocalProjections.jl/stable/replication/ugarte2026/),
+  [Ilzetzki](https://andrearecine.me/PanelLocalProjections.jl/stable/replication/ilzetzki2024/) (on his replication data, not
   distributed),
-  [firm-level studies](docs/src/replication/firm_level_wip.md) (call mappings, not run on
+  [firm-level studies](https://andrearecine.me/PanelLocalProjections.jl/stable/replication/firm_level_wip/) (call mappings, not run on
   the data).
-- [Cross-checks](crosscheck/README.md), [deviations](docs/src/deviations.md) and
-  [audits of the reference code](docs/src/audit).
+- [Cross-checks](https://andrearecine.me/PanelLocalProjections.jl/stable/crosscheck/), [deviations](https://andrearecine.me/PanelLocalProjections.jl/stable/deviations/) and
+  audits of the reference code, starting with [`xtlp`](https://andrearecine.me/PanelLocalProjections.jl/stable/audit/xtlp/) and [`lpdid`](https://andrearecine.me/PanelLocalProjections.jl/stable/audit/lpdid/).
 - API: every exported name has a docstring (`?panellp`); the list is in
-  [`docs/src/api.md`](docs/src/api.md).
+  the [API page](https://andrearecine.me/PanelLocalProjections.jl/stable/api/).
 
-To build the HTML pages locally (Julia 1.11 or later), into `docs/build`:
+The sources are in [`docs/src`](docs/src). To build the HTML pages locally (Julia 1.11 or later), into `docs/build`:
 
 ```bash
 julia --project=docs -e 'using Pkg; Pkg.instantiate()'
