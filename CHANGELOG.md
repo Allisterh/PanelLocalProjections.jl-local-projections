@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased
+
+### LP-DiD: non-absorbing rules (**estimates change** on panels with gaps, missing treatment values, or units treated from their first row)
+- Switches are counted between consecutive observed treatment values. They were summed
+  from the observed first differences, as `lpdid` does, so a switch in an absent period or
+  behind a missing value was not seen: a unit observed untreated and then treated could
+  serve as a not-yet-treated control (`control = :notyet`; 13 of the 260 rows at h = 0 on
+  the unbalanced test panel), its next switch counted as the first (`firsttreat`), and an
+  absorbing treatment that switched off inside a gap was not refused.
+- A control is a row with ΔD = 0. The first-treatment estimator (`firsttreat` with
+  `control = :notyet` or `:nevertreated`) kept the rows where a unit treated from its first
+  row switches off, with a regressor of −1, as `lpdid` does (on a noise-free panel with a
+  true effect of 2 the estimate was 1.05).
+- `compat = :lpdid` reproduces the command where it differs from these rules and from the
+  reweighting of 0.2.1; `reweight = :lpdid` is now short for `reweight = true,
+  compat = :lpdid`. On balanced panels without missing values whose units all start
+  untreated, nothing changes.
+- `ldiff(lags(y, 1))` as an LP-DiD response is read at its own periods (it went through
+  the row of t + h, the nested-shift bug that 0.2.1 fixed elsewhere).
+- When no horizon has both treated rows and clean controls, the error says so (it
+  suggested dropping the time effects).
+
+### Other fixes (black-box review of 2026-11-18)
+- `CDOLS()`: the checks crashed (`BoundsError`) with a path term `leads(z)` written before
+  the shock, and rejected the path of the outcome with an unrelated message.
+- A lead of a path term cannot be the shock, by name or as the first regressor: a clear
+  error instead of "No value arguments present".
+- `firststage(r; vcov = Homoskedastic())` returned NaN: it is now the classical variance of
+  the first stage, whose F equals the Cragg–Donald F with one endogenous regressor.
+- `firststage` with a variance that is exactly zero (an aggregate instrument times a
+  time-invariant exposure, clustered by unit, on a balanced panel: the scores sum to zero
+  within every unit) reported an F of order 1e33; it is NaN, with the warning.
+- `synthetic` on a weighted fit says that weighted fits store no synthetic series.
+- Docs: with `nonabsorbing = L`, the `pmd` base needs k + L − 1 clean periods before t (the
+  page said the base window only); `nonabsorbing = 0` is 1.
+- Tests: the runner only takes the items of this repository's `test/` directory.
+
+### The three behaviours that 0.2.1 reported and left as they were
+- A shock that lies in the span of the other regressors makes the horizon `:singular` (an
+  error when it happens at every horizon), whatever the order of the formula. Before,
+  the pivoting decided which column of the collinear set was omitted: `x + x2` with
+  `x2 = 2x` gave the shock `x` a coefficient, `x2 + x` an error. A collinear set without
+  the shock still loses one column, with a note; a lag added by `LagAugmented` still gives
+  way to the formula's columns.
+- `Clustered(:unit, :time; ssc = :mss)` with a negative factor (n ≤ N + K) gives a `NaN`
+  variance, with a warning. Before, the default PSD repair clipped the sign-flipped
+  variance into a finite or zero standard error. `psd = :raw` keeps the clipping, which is
+  the authors' order of operations, and the warning says that the numbers have no meaning.
+- With `AlternatingProjections(tol = …)` looser than the default, the columns that are
+  mostly absorbed are transformed again at the default tolerance before the
+  absorbed-column screen. On a slowly mixing panel an aggregate regressor with time
+  effects could otherwise get a coefficient (1.95 on the test panel at `tol = 1e-6`).
+
 ## 0.2.1 (2026-11-18): LP-DiD, negative horizons, lead paths
 
 ### LP-DiD (Dube, Girardi, Jordà & Taylor 2025)

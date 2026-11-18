@@ -46,6 +46,9 @@ function synthetic(r::PanelLocalProjection, h::Integer; term = r.shocks[1],
     isempty(r.endogenous) || throw(ArgumentError(
         "panel LP-IV fits store no synthetic series (TLAHR(refine = true), which uses " *
         "them, is not defined for IV)"))
+    r.weights === nothing || throw(ArgumentError(
+        "weighted fits store no synthetic series (TLAHR(refine = true), which uses " *
+        "them, is not defined for weighted fits)"))
     f = _fit(r, h)
     j = _termindex(r.coefnames, term)
     f.status === :ok ||

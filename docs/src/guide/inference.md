@@ -44,7 +44,8 @@ Each convention is an explicit `ssc` value. Below, ``n`` is the number of observ
 The two `:mss` rows use ``N`` and ``T``, the numbers of units and periods in the data;
 `ssc = :mss` exists only for these two specifications, as in the authors' code. With
 unbalanced data the two-way factor turns negative at long horizons (``n \le N + K``),
-which is reported. `ase` in `xtlp` and `xtscc` removes the small-sample factor but keeps
+which is reported: the variance is then `NaN`. With `psd = :raw` its negative eigenvalues
+are clipped instead, as the authors' code does, and the standard errors have no meaning. `ase` in `xtlp` and `xtscc` removes the small-sample factor but keeps
 their ``t(G-1)`` or ``t(T-1)`` critical values. `summarize(…; dist = :normal)` gives
 normal ones.
 

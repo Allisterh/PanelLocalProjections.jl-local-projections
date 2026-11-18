@@ -40,7 +40,9 @@ reference. The audit pages document each reference in detail.
 
 | topic | `lpdid` | `panellp` (`LPDiD`) | switch |
 |---|---|---|---|
-| reweighting factor of the weighted regression (`rw`) | the treated share of the period among clean rows with the outcome, including rows whose ``\Delta D`` is undefined and that the regression drops | the treated share among the rows of the regression (the equally weighted average of the cohorts' comparisons) | `reweight = :lpdid` |
+| reweighting factor of the weighted regression (`rw`) | the treated share of the period among clean rows with the outcome, including rows whose ``\Delta D`` is undefined and that the regression drops | the treated share among the rows of the regression (the equally weighted average of the cohorts' comparisons) | `compat = :lpdid` |
+| switches, for `notyet`, `firsttreat` and the check of an absorbing treatment | summed from the observed first differences: a switch in a gap or behind a missing value is not seen | changes between consecutive observed treatment values | `compat = :lpdid` |
+| first treatment with `notyet` or `nevertreated` | keeps the switch-off rows of a unit treated from its first row, with a regressor of −1 | a control has ``\Delta D = 0``: those rows are left out | `compat = :lpdid` |
 | a treatment that switches off, without `nonabsorbing()` | kept, with a regressor of −1 | an error | `nonabsorbing = L` |
 | `nocomp` with a one-sided window | also requires the pre-treatment horizon 2 (or horizon 0) | the requested horizons (`sample = :common`) | `horizon = -2:H` |
 | pooled regressions under `nocomp` | the flags of both pooled windows | the horizons of the window | — |

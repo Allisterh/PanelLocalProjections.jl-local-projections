@@ -459,12 +459,19 @@ function StatsAPI.vcov(spec::PanelVcov, r::PanelLocalProjection)
             push!(flag === :undefined ? undefined : leverage, fit.h)
         else
             flag === :negfactor && push!(negfactor, fit.h)
-            if metric !== :none
+            # a negative factor flips the sign of the variance: clipping its negative
+            # eigenvalues would leave numbers without meaning, so the variance is NaN.
+            # `psd = :raw` does clip it, as the Mei–Sheng–Shi code, whose order of
+            # operations it reproduces.
+            if flag === :negfactor && metric !== :raw
+                Vk = fill(NaN, size(Vk))
+            elseif metric !== :none
                 icol = r.intercept && fit.keep[1] ? 1 : nothing
                 Vk, fixed = metric === :stata ? _psd_clip(Vk, fit.xsd[kidx], icol) :
                             _psd_clip(Vk, nothing)
             end
-            any(<(0), LinearAlgebra.diag(Vk)) && push!(negvar, fit.h)
+            flag !== :negfactor && any(<(0), LinearAlgebra.diag(Vk)) &&
+                push!(negvar, fit.h)
             V[kidx, kidx] = Vk
         end
         push!(Vs, V)
@@ -486,8 +493,14 @@ function StatsAPI.vcov(spec::PanelVcov, r::PanelLocalProjection)
         @warn "$label: a period has leverage one in the synthetic regression at " *
               "h = $(_hlist(leverage)) (too few periods for the regressors?); the " *
               "variance is NaN there"
-    isempty(negfactor) || @warn "$label: the Mei–Sheng–Shi two-way factor is negative at " *
-          "h = $(_hlist(negfactor)) (n ≤ N + K, with N the units in the data)"
+    isempty(negfactor) ||
+        @warn "$label: the Mei–Sheng–Shi two-way factor is negative at " *
+              "h = $(_hlist(negfactor)) (n ≤ N + K, with N the units in the data), and so is " *
+              "the variance: " *
+              (metric === :raw ?
+               "its negative eigenvalues are clipped (psd = :raw, as the authors' code), " *
+               "and the standard errors there have no meaning" :
+               "the standard errors are NaN there")
     isempty(negvar) || @warn "$label has negative variances at h = $(_hlist(negvar)); " *
           "their standard errors are NaN. A PSD repair (psd = :stata or :raw) avoids them"
     return PanelLPVcov(spec, r.coefnames, r.horizons, Vs, dfs, infos, _fingerprint(r))
@@ -518,8 +531,8 @@ end
 
 First-stage diagnostics of a panel LP-IV result, per horizon, with the variance
 specification `vcov` (any of [`Robust`](@ref), [`Clustered`](@ref),
-[`DriscollKraaySE`](@ref), [`CosineHAR`](@ref), `TLAHR(refine = false)`) applied to the
-first-stage scores, with its small-sample factor computed from the first stage's degrees
+[`DriscollKraaySE`](@ref), [`CosineHAR`](@ref), [`Homoskedastic`](@ref),
+`TLAHR(refine = false)`) applied to the first-stage scores, with its small-sample factor computed from the first stage's degrees
 of freedom (its regressors: the exogenous ones and the excluded instruments), as ivreg2,
 ivreghdfe and weakivtest do:
 
@@ -530,12 +543,18 @@ ivreghdfe and weakivtest do:
   regressor it is the Wald F of Π = 0. ivreg2's `widstat`.
 - `effF` (one endogenous regressor): the Montiel Olea & Pflueger (2013) effective F,
   π̂'Z̃'Z̃π̂ / tr(V̂(π̂) Z̃'Z̃); equal to `kpF` with one instrument.
+- `cdF`: the Cragg–Donald (1993) Wald F, the weak-identification statistic under
+  homoskedastic errors (ivreg2's `widstat` without `robust` or `cluster`); it does not
+  depend on `vcov`. With one endogenous regressor and `vcov = Homoskedastic()`, `kpF`
+  equals it.
 - `coef`, `se`: the first-stage coefficients of the instruments and their standard errors
   (instruments × endogenous) per horizon.
 
 Two-way clustered variances are not repaired (`psd` is ignored, as in ivreg2): where the
 variance that a statistic needs is not positive definite, the statistic is NaN, with a
-warning.
+warning. So it is where the variance is zero: with an aggregate instrument times a
+time-invariant exposure on a balanced panel, the first-stage scores sum to zero within
+every unit, and a variance clustered by unit has nothing to measure.
 """
 function firststage(r::PanelLocalProjection; vcov::PanelVcov = TLAHR(refine = false))
     isempty(r.endogenous) &&
@@ -567,9 +586,19 @@ function firststage(r::PanelLocalProjection; vcov::PanelVcov = TLAHR(refine = fa
             ones(Lm), fit.esample, fit.timepresent, dof, fs.scores, fit.iterations,
             fit.converged, trues(Lm), fit.nlags, SyntheticSeries[], falses(0), nothing,
             NaN, NaN, nothing)
-        V, _, _, flag = _sandwich(vcov, r, pfit, ctx, collect(1:Lm))
+        V, _, _, flag = vcov isa Homoskedastic ? _firststage_classical(vcov, fs, dof) :
+                        _sandwich(vcov, r, pfit, ctx, collect(1:Lm))
         if flag === :undefined || flag === :bandwidth || !all(isfinite, V)
             push!(undefined, fit.h)
+            continue
+        end
+        # a variance that is round-off (the first-stage scores sum to zero within every
+        # cluster: an aggregate instrument times a time-invariant exposure, clustered by
+        # unit on a balanced panel) gives statistics that are round-off over round-off
+        Vobs = fs.bread * fs.scores.Mobs * fs.bread
+        if maximum(LinearAlgebra.diag(V)) <= 1e-20 * maximum(LinearAlgebra.diag(Vobs))
+            push!(undefined, fit.h)
+            ses[k] = zeros(L, m)
             continue
         end
         ses[k] = reshape([v >= 0 ? sqrt(v) : NaN for v in LinearAlgebra.diag(V)], L, m)
@@ -583,20 +612,27 @@ function firststage(r::PanelLocalProjection; vcov::PanelVcov = TLAHR(refine = fa
         end
     end
     isempty(undefined) || @warn "firststage: $(_label(vcov)) is undefined, or the " *
-          "variance of the first stage is not positive definite, at " *
+          "variance of the first stage is not positive definite (or is zero: the scores " *
+          "sum to zero within every cluster), at " *
           "h = $(_hlist(sort!(unique(undefined)))); the statistics are NaN there"
     return FirstStageSummary(_label(vcov), collect(r.horizons), kpF, effF, rk, cdF, ninst,
         nendo, nobs, endos, insts, coefs, ses)
 end
 
-# Kleibergen–Paap (2006) rk Wald statistic of the test that Π (L × m) has rank m − 1, with
-# V = Var(vec Π̂): Θ̂ = L_z' Π̂ L_y⁻ᵀ (L_z L_z' = Z̃'Z̃/n, L_y L_y' = X̃'X̃/n), Θ̂ = U S V' (full
-# SVD), q = m − 1; λ = (B ⊗ A') vec Θ̂ and rk = λ' [(B ⊗ A') V_Θ (B ⊗ A')']⁻¹ λ, with
-# V_Θ = (L_y⁻¹ ⊗ L_z') V (L_y⁻¹ ⊗ L_z')'. KP's eq. (12) takes A = U₂ U₂₂⁻¹(U₂₂U₂₂')^{1/2}
-# and B = (V₂₂V₂₂')^{1/2} V₂₂'⁻¹ V₂' (U₂, V₂ the trailing singular vectors): nonsingular
-# transformations of U₂ and V₂, which leave the Wald statistic unchanged. With A = U₂ and
-# B = V₂' there is nothing to invert, also when U₂₂ or V₂₂ is singular (tied singular
-# values, e.g. group dummies × an aggregate with a diagonal Π̂).
+# The classical variance of the first stage, Σ̂_v ⊗ (Z̃'Z̃)⁻¹, with Σ̂_v the residual
+# covariance of the first-stage regressions (divided by n, or by the residual degrees of
+# freedom with `ssc = :stata`): the first stage has no fit of its own to take it from.
+function _firststage_classical(s::Homoskedastic, fs::FirstStage, dof::DofInfo)
+    L, m = size(fs.coef)
+    dfr = dof.nobs - dof.k - dof.df_a
+    nan = (fill(NaN, L * m, L * m), fill(NaN, L * m), VcovInfo(NaN, 0, 0, 0, false))
+    (dfr > 0 && _wellconditioned(fs.zz)) || return (nan..., :undefined)
+    Σ = (fs.yy .- fs.coef' * fs.zz * fs.coef) ./ (s.ssc === :none ? dof.nobs : dfr)
+    V = kron(Σ, inv(fs.zz))
+    df = s.ssc === :none ? Inf : Float64(dfr)
+    return (V + V') ./ 2, fill(df, L * m), VcovInfo(1.0, 0, 0, 0, false), :ok
+end
+
 # Whether a cross-product matrix, scaled to unit diagonal, has a reciprocal condition
 # number above 1e-10: below it, statistics that go through its normal equations (the
 # first-stage diagnostics) have no correct digits.
@@ -624,6 +660,14 @@ function _craggdonald(fs::FirstStage, dfr::Int)
     return first(λ) * dfr / L
 end
 
+# Kleibergen–Paap (2006) rk Wald statistic of the test that Π (L × m) has rank m − 1, with
+# V = Var(vec Π̂): Θ̂ = L_z' Π̂ L_y⁻ᵀ (L_z L_z' = Z̃'Z̃/n, L_y L_y' = X̃'X̃/n), Θ̂ = U S V' (full
+# SVD), q = m − 1; λ = (B ⊗ A') vec Θ̂ and rk = λ' [(B ⊗ A') V_Θ (B ⊗ A')']⁻¹ λ, with
+# V_Θ = (L_y⁻¹ ⊗ L_z') V (L_y⁻¹ ⊗ L_z')'. KP's eq. (12) takes A = U₂ U₂₂⁻¹(U₂₂U₂₂')^{1/2}
+# and B = (V₂₂V₂₂')^{1/2} V₂₂'⁻¹ V₂' (U₂, V₂ the trailing singular vectors): nonsingular
+# transformations of U₂ and V₂, which leave the Wald statistic unchanged. With A = U₂ and
+# B = V₂' there is nothing to invert, also when U₂₂ or V₂₂ is singular (tied singular
+# values, e.g. group dummies × an aggregate with a diagonal Π̂).
 function _kprk(fs::FirstStage, V::Matrix{Float64}, n::Int)
     L, m = size(fs.coef)
     # nearly collinear instruments that the first stage keeps can leave Z̃'Z̃ numerically

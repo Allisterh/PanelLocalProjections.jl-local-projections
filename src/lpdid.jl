@@ -10,22 +10,23 @@
 function LPDiD(;
         control::Symbol = :clean, nonabsorbing = nothing, firsttreat::Bool = false,
         oneoff::Bool = false, untreated_before::Bool = false, reweight = false,
-        pmd = nothing)
+        pmd = nothing, compat::Symbol = :none)
     L = nonabsorbing === nothing || nonabsorbing === false ? nothing :
         nonabsorbing === true ? -1 :
         nonabsorbing isa Integer ? Int(nonabsorbing) :
         throw(ArgumentError(
         "nonabsorbing is the number of periods L after which effects stabilise (or `true` " *
         "with firsttreat and control = :notyet or :nevertreated); got $(repr(nonabsorbing))"))
+    # `reweight = :lpdid` (0.2.1) is `reweight = true, compat = :lpdid`
+    reweight === :lpdid && (compat = :lpdid)
     rw = reweight === false ? :none :
-         reweight === true ? :equal :
-         reweight isa Symbol ? reweight :
-         throw(ArgumentError("reweight must be true, false or :lpdid; got $(repr(reweight))"))
+         reweight === true || reweight === :lpdid ? :equal :
+         throw(ArgumentError("reweight must be true or false; got $(repr(reweight))"))
     k = pmd === nothing || pmd === false ? 0 :
         pmd === :max ? -1 :
         pmd isa Integer && pmd >= 1 ? Int(pmd) :
         throw(ArgumentError("pmd must be a number of periods k ≥ 1 or :max; got $(repr(pmd))"))
-    return LPDiD(control, L, firsttreat, oneoff, untreated_before, rw, k)
+    return LPDiD(control, L, firsttreat, oneoff, untreated_before, rw, k, compat)
 end
 
 function _label(e::LPDiD)
@@ -36,9 +37,9 @@ function _label(e::LPDiD)
     e.firsttreat && push!(opts, "firsttreat = true")
     e.oneoff && push!(opts, "oneoff = true")
     e.untreated_before && push!(opts, "untreated_before = true")
-    e.reweight === :none ||
-        push!(opts, "reweight = $(e.reweight === :equal ? true : repr(e.reweight))")
+    e.reweight === :none || push!(opts, "reweight = true")
     e.pmd == 0 || push!(opts, "pmd = $(e.pmd < 0 ? ":max" : e.pmd)")
+    e.compat === :none || push!(opts, "compat = :$(e.compat)")
     return "LPDiD($(join(opts, ", ")))"
 end
 
@@ -79,20 +80,58 @@ function _runsum(p::PanelIndex, x::Vector{Float64})
     return out
 end
 
+# Number of switches of each unit up to each of its rows, counted between consecutive
+# observed values: a change hidden in an absent period or behind a missing value counts.
+function _switches(p::PanelIndex, D::Vector{Float64})
+    out = Vector{Float64}(undef, length(D))
+    for i in axes(p.rowof, 1)
+        last, n = NaN, 0
+        for j in axes(p.rowof, 2)
+            r = p.rowof[i, j]
+            r == 0 && continue
+            if !isnan(D[r])
+                (!isnan(last) && D[r] != last) && (n += 1)
+                last = D[r]
+            end
+            out[r] = n
+        end
+    end
+    return out
+end
+
+# Number of units whose observed treatment values fall from 1 to 0 at some point.
+function _exits(p::PanelIndex, D::Vector{Float64})
+    n = 0
+    for i in axes(p.rowof, 1)
+        last = NaN
+        for j in axes(p.rowof, 2)
+            r = p.rowof[i, j]
+            (r == 0 || isnan(D[r])) && continue
+            if last == 1 && D[r] == 0
+                n += 1
+                break
+            end
+            last = D[r]
+        end
+    end
+    return n
+end
+
 # x_{i,t−1} subtracted from x_{i,t} (NaN when either is undefined).
 _delta(p::PanelIndex, x::Vector{Float64}) = x .- _gather(x, _shift(p, -1))
 
 # Mean of the outcome over the k periods before t (all required), or over every earlier
 # row of the unit when k < 0 (`pmd = :max`; undefined when the row of t − 1 is absent or no
-# earlier outcome is observed).
-function _premean(p::PanelIndex, y::Vector{Float64}, k::Int)
+# earlier outcome is observed). `term` is the outcome's term, evaluated at each lag.
+function _premean(p::PanelIndex, term, ctx::_EvalContext, k::Int)
     if k > 0
-        acc = zeros(length(y))
+        acc = zeros(nrows(p))
         for l in 1:k
-            acc .+= _gather(y, _shift(p, -l))
+            acc .+= _col1(term, ctx, -l)
         end
         return acc ./ k
     end
+    y = _col1(term, ctx)
     out = fill(NaN, length(y))
     for i in axes(p.rowof, 1)
         s, n = 0.0, 0
@@ -134,8 +173,10 @@ function _did_resolve(est::LPDiD, d::PanelDesign, ctx::_EvalContext,
         isnan(D[r]) || (mx[p.unit[r]] = max(mx[p.unit[r]], D[r]))
     end
     never = BitVector(mx[p.unit[r]] == 0 for r in 1:n)
-    # not yet treated at t: no switch up to t, and untreated at the unit's first row
-    P = _runsum(p, abs.(dD))
+    # not yet treated at t: no switch up to t, and untreated at the unit's first row.
+    # Switches are changes between consecutive observed values; `lpdid` sums the observed
+    # first differences, which misses a switch hidden in a gap.
+    P = est.compat === :lpdid ? _runsum(p, abs.(dD)) : _switches(p, D)
     entry = fill(NaN, nunits(p))
     for r in 1:n
         p.period[r] == first_t(r) && (entry[p.unit[r]] = D[r])
@@ -175,7 +216,8 @@ function _did_resolve(est::LPDiD, d::PanelDesign, ctx::_EvalContext,
             C0 .&= quiet(k)
         end
     end
-    y = _col1(d.response.term, ctx)
+    term = d.response.term
+    y = _col1(term, ctx)
     k = est.pmd
     # with a non-absorbing treatment and no first-treatment rule, the pre-treatment mean
     # is over the stabilisation window
@@ -184,7 +226,7 @@ function _did_resolve(est::LPDiD, d::PanelDesign, ctx::_EvalContext,
         throw(ArgumentError(
             "LPDiD(pmd = :max) with nonabsorbing = 0 has no pre-treatment window; give pmd a " *
             "number of periods"))
-    base = k == 0 ? _gather(y, _shift(p, -1)) : _premean(p, y, k)
+    base = k == 0 ? _col1(term, ctx, -1) : _premean(p, term, ctx, k)
     if k > 0 && est.nonabsorbing !== nothing
         for kk in 1:(k + L - 1)
             q = quiet(kk)
@@ -193,7 +235,11 @@ function _did_resolve(est::LPDiD, d::PanelDesign, ctx::_EvalContext,
             end
         end
     end
-    return _DiD(est, horizons, D, dD, never, P, E0, Q, C0, y, base, false)
+    respok = trues(n)
+    for h in horizons
+        respok .&= isfinite.(_col1(term, ctx, h) .- base)
+    end
+    return _DiD(est, horizons, D, dD, never, P, E0, Q, C0, y, base, respok, false)
 end
 
 """
@@ -204,7 +250,9 @@ controls of horizon h (DGJT Sections 3.1 and 4.2), before any missing-value rule
 condition on an unobserved value is false.
 
 - Absorbing rule (the default; first treatment with not-yet-treated or never-treated
-  controls): ΔD_t = 1, or D_{t+h} = 0; D_t = 0 at pre-treatment horizons.
+  controls): ΔD_t = 1, or ΔD_t = 0 and D_{t+h} = 0 (D_t = 0 at pre-treatment horizons).
+  `compat = :lpdid` does not require ΔD_t = 0 of a control, which lets in the rows where a
+  unit treated from its first row switches off.
 - `nonabsorbing = L`: ΔD_t ∈ {0, 1} and no switch in the L periods before t, nor in
   t + 1, …, t + h; at h < 0, the same at t, t − 1, …, t − |h| + 1. With `oneoff`, events
   (D = 1) in place of switches.
@@ -219,9 +267,10 @@ function _cleanflag(s::_DiD, p::PanelIndex, h::Int)
     lead = _shift(p, hp)
     flag = falses(n)
     if _absorbingrule(e)
+        lp = e.compat === :lpdid
         for r in 1:n
             j = lead[r]
-            flag[r] = s.dD[r] == 1 || (j != 0 && s.D[j] == 0)
+            flag[r] = s.dD[r] == 1 || ((lp || s.dD[r] == 0) && j != 0 && s.D[j] == 0)
         end
     elseif h >= 0
         flag .= s.C0
@@ -280,7 +329,7 @@ end
 
 function _validate(est::LPDiD, d::PanelDesign, f)
     _check_option(est.control, (:clean, :nevertreated, :notyet), "control")
-    _check_option(est.reweight, (:none, :equal, :lpdid), "reweight")
+    _check_option(est.compat, (:none, :lpdid), "compat")
     d.response isa LDiffResponse || throw(ArgumentError(
         "LPDiD estimates the long difference y_{t+h} − y_{t−1}: write the response as " *
         "ldiff(y)"))
@@ -300,12 +349,14 @@ function _validate(est::LPDiD, d::PanelDesign, f)
             "control = :notyet is a rule for a non-absorbing treatment (nonabsorbing = L); " *
             "with an absorbing treatment the default clean controls are the not-yet-treated " *
             "and the never-treated"))
-        dD = _delta(d.pidx, D)
-        nexit = count(==(-1), dD)
+        # also a switch-off hidden in a gap or behind a missing value (which `lpdid`
+        # does not see)
+        nexit = est.compat === :lpdid ? count(==(-1), _delta(d.pidx, D)) :
+                _exits(d.pidx, D)
         nexit == 0 || throw(ArgumentError(
-            "the treatment :$tvar is not absorbing: it switches off at $nexit row(s). Set " *
-            "LPDiD(nonabsorbing = L), with L the periods after which effects are assumed " *
-            "to stabilise (DGJT Section 4.2)"))
+            "the treatment :$tvar is not absorbing: it switches off for $nexit unit(s) " *
+            "(or row(s)). Set LPDiD(nonabsorbing = L), with L the periods after which " *
+            "effects are assumed to stabilise (DGJT Section 4.2)"))
     else
         est.nonabsorbing < 0 && !_pseudoabsorbing(est) &&
             throw(ArgumentError(
@@ -372,7 +423,7 @@ Weights of the equally weighted LP-DiD regression (DGJT Section 3.3): within eac
 every row is weighted by 1/(1 − p_t), p_t the (weighted) share of treated rows of the
 period in the sample, which turns the variance weights N_t p_t (1 − p_t) of the cohorts
 into their numbers of treated rows. Periods without a treated row or without a control
-row leave the sample. `extra` marks rows outside the regression that `reweight = :lpdid`
+row leave the sample. `extra` marks rows outside the regression that `compat = :lpdid`
 counts among the controls of their period (as `lpdid` 1.1.0 does: clean rows whose ΔD is
 undefined).
 """
@@ -385,7 +436,7 @@ function _rwweights(d::PanelDesign, s::_DiD, mask::BitVector, extra::BitVector)
         k = p.period[r] - p.pmin + 1
         s.dD[r] == 1 ? (A1[k] += a(r)) : (A0[k] += a(r))
     end
-    if s.spec.reweight === :lpdid
+    if s.spec.compat === :lpdid
         for r in findall(extra)
             A0[p.period[r] - p.pmin + 1] += a(r)
         end
@@ -411,7 +462,7 @@ function _fit_horizon(s::_DiD, d::PanelDesign, h::Int, y::Vector{Float64},
     end
     w = d.weights
     if s.spec.reweight !== :none
-        extra = s.spec.reweight === :lpdid ? _rwextra(s, d, h, y) : falses(0)
+        extra = s.spec.compat === :lpdid ? _rwextra(s, d, h, y) : falses(0)
         w, mask = _rwweights(d, s, mask, extra)
     end
     fit = _fit_within(d, h, y, mask, singletons, absorb, cols, 0; weights = w)
@@ -427,8 +478,8 @@ function _rwextra(s::_DiD, d::PanelDesign, h::Int, y::Vector{Float64})
     if s.common
         for hh in s.horizons
             flag .&= _cleanflag(s, d.pidx, hh)
-            flag .&= isfinite.(_gather(s.y, _shift(d.pidx, hh)) .- s.base)
         end
+        flag .&= s.respok
     end
     out = falses(length(flag))
     for r in eachindex(flag)

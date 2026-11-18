@@ -66,6 +66,7 @@ function _within_fit(d::PanelDesign, y::Vector{Float64}, mask::BitVector,
     added = Int[k for (k, j) in enumerate(cols) if d.lagorder[j] > 0]
     Xt = view(A, :, 2:(1 + nc))
     absall = _absorbed_cols(view(A, :, 2:size(A, 2)), rawall, hasfe, d.intercept)
+    hasfe && _recheck_absorbed!(absall, A, d, rows, cols, zcols, rawall, fs, absorb, wr)
     xabs = absall[1:nc]
     K = length(d.coefnames)
     instkeep = falses(size(d.Z, 2))
@@ -116,6 +117,35 @@ function _within_fit(d::PanelDesign, y::Vector{Float64}, mask::BitVector,
     return (; o.β, o.B, keep, absorbed, resid, o.status, rows,
         Xk = view(A, :, 2:(1 + length(kc))), yt, fs, xsd, iterations = it,
         converged = conv, instkeep, first = fst)
+end
+
+const _DEFAULT_ABSORB_TOL = 1e-12
+
+# The absorbed-column screen (‖x̃‖² ≤ 1e-8 ‖x − x̄‖²) needs the within transformation to
+# be accurate well below a norm ratio of 1e-4. With a looser `tol` than the default, on a
+# slowly mixing panel the transformation can stop above it, and a column that the fixed
+# effects absorb would pass the screen and get an arbitrary coefficient. The columns that
+# are mostly absorbed (within share below 1e-2) are therefore transformed again at the
+# default tolerance and screened on that. Nothing is done at the default tolerance, nor
+# for `OneSweep`, which is one pass by definition.
+function _recheck_absorbed!(absall::BitVector, A::Matrix{Float64}, d::PanelDesign,
+        rows::Vector{Int}, cols::Vector{Int}, zcols::Vector{Int}, rawall::NamedTuple,
+        fs::_FESample, absorb::AbsorptionMethod, wr::Union{Nothing, Vector{Float64}})
+    (absorb isa AlternatingProjections && absorb.tol > _DEFAULT_ABSORB_TOL) ||
+        return absall
+    tight = AlternatingProjections(_DEFAULT_ABSORB_TOL, absorb.maxiter, absorb.accelerate)
+    nc = length(cols)
+    for c in eachindex(absall)
+        absall[c] && continue
+        css = rawall.css[c]
+        sum(abs2, view(A, :, c + 1)) <= 1e-2 * css || continue
+        v = c <= nc ? d.X[rows, cols[c]] : d.Z[rows, zcols[c - nc]]
+        V = reshape(v, :, 1)
+        _absorb_matrix!(V, fs, tight, wr)
+        ss = wr === nothing ? sum(abs2, v) : LinearAlgebra.dot(wr, abs2.(v))
+        ss <= _ABSORBED_TOL * css && (absall[c] = true)
+    end
+    return absall
 end
 
 """
@@ -667,8 +697,10 @@ function _validate(est::CDOLS, d::PanelDesign, f)
     # the response's own date: ldiff(y) and cumul(g) start at t, ldiff(lags(y, 1)) at t − 1
     ℓr = only(_collags(r.term))
     base = ℓr == 0 ? "t" : "t−$ℓr"
-    regs, _, _ = _rewrite_rhs(f.rhs)
-    dates = vcat(d.intercept ? [0] : Int[], (_collags(t) for t in regs)...)
+    # the terms as the design built them (a path term `leads(x)` is its leads 1, …, H there,
+    # and absent when no horizon uses it), and the date of each of its columns
+    regs = unique(Any[ct[1] for ct in d.colterm if ct !== nothing])
+    dates = Int[ct === nothing ? 0 : _collags(ct[1])[ct[2]] for ct in d.colterm]
     for j in d.shockcols
         nm = d.coefnames[j]
         ℓ = dates[j]

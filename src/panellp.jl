@@ -117,6 +117,12 @@ function panellp(f::StatsModels.FormulaTerm, data; id::Symbol, time::Symbol, hor
         fits = _estimate(est, d, ctx, horizons, masks, singletons, absorb)
         window = 1:0
     end
+    estimator isa LPDiD && !any(f -> f.status === :ok, fits) &&
+        !all(f -> f.status === :empty, fits) &&
+        throw(ArgumentError(
+            "LP-DiD: no horizon has both rows entering treatment and clean controls in " *
+            "the same period (the treatment switch is constant in every sample). Check " *
+            "the treatment column and the clean-control options: $(_label(estimator))"))
     _check_identified(fits, d, time)
     p = d.pidx
     panel = PanelSummary(
@@ -182,7 +188,7 @@ function _response(::PanelLPEstimator, d::PanelDesign, ctx::_EvalContext, h::Int
     _lhs_at(d.response, ctx, h)
 end
 function _response(s::_DiD, d::PanelDesign, ctx::_EvalContext, h::Int)
-    return _gather(s.y, _shiftof(ctx, h)) .- s.base
+    return _col1(d.response.term, ctx, h) .- s.base
 end
 
 # Estimator-specific restrictions of the sample of horizon h.
