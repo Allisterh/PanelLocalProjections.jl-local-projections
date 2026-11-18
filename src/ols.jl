@@ -93,6 +93,9 @@ function _ols(Xt::AbstractMatrix{Float64}, yt::Vector{Float64}, raw, hasfe::Bool
     d = abs.(LinearAlgebra.diag(F.R))
     rank = count(>(_RANK_TOL * d[1]), d)
     if rank < length(kidx)
+        # a shock in the span of the other regressors is not identified, whichever column
+        # of the collinear set the pivoting would omit (it depends on the formula's order)
+        _shockspanned(Xt, kidx, shockcols, added) && return singular
         if any(j -> keep[j], added)
             _dropcollinear!(keep, Xt, added)
         else
@@ -114,6 +117,30 @@ function _ols(Xt::AbstractMatrix{Float64}, yt::Vector{Float64}, raw, hasfe::Bool
     B[p, p] = A
     B ./= norms .* norms'
     return (; β, B, keep, absorbed, resid, status = :ok)
+end
+
+# Whether a shock column lies in the span of the other candidate columns `kidx` (unit
+# norm, at the rank tolerance). The lags that `LagAugmented` added are not among the
+# others: they give way to the formula's columns, so a shock collinear only through one of
+# them stays identified.
+function _shockspanned(Xt::AbstractMatrix{Float64}, kidx::Vector{Int},
+        shockcols::Vector{Int}, added::Vector{Int})
+    n = size(Xt, 1)
+    for j in shockcols
+        others = [k for k in kidx if k != j && !(k in added)]
+        isempty(others) && continue
+        x = Xt[:, j]
+        nx = LinearAlgebra.norm(x)
+        nx > 0 || return true
+        x ./= nx
+        F, _ = _eqr(Xt, others)
+        dg = abs.(LinearAlgebra.diag(F.R))
+        r = count(>(_RANK_TOL * dg[1]), dg)
+        Q = F.Q * Matrix{Float64}(LinearAlgebra.I, n, r)
+        x .-= Q * (Q' * x)
+        LinearAlgebra.norm(x) <= _RANK_TOL && return true
+    end
+    return false
 end
 
 # Collinear columns among the kept ones, omitting those in `added` rather than the others:

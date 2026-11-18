@@ -463,3 +463,272 @@ end
         ε == 1e-2 && @test all(isfinite, fs.kpF) && all(isfinite, fs.cdF)
     end
 end
+
+@testitem "judgement calls of the 2026-11 review" tags = [:core, :ols, :vcov, :absorb] begin
+    using StatsModels, StableRNGs
+    include(joinpath(@__DIR__, "support", "PLPDGPs.jl"))
+    using .PLPDGPs: read_csv
+    b = read_csv(joinpath(@__DIR__, "fixtures", "synthetic", "fx_balanced.csv"))
+    kw = (; id = :id, time = :t)
+
+    # 1. a shock in the span of the other regressors is not identified, whatever the order
+    #    of the formula (the pivoting used to decide which column of the set was omitted)
+    d = merge(b, (; x2 = 2 .* b.x, xw = b.x .+ b.w))
+    for f in (@formula(leads(y) ~ x + x2 + fe(id)), @formula(leads(y) ~ x2 + x + fe(id)),
+        @formula(leads(y) ~ x + w + xw + fe(id)), @formula(leads(y) ~ xw + w + x + fe(id)),
+        @formula(leads(y) ~ w + xw + x + fe(id)))
+        e = try
+            panellp(f, d; horizon = 0:1, shock = "x", kw...)
+        catch e
+            e
+        end
+        @test e isa ArgumentError && occursin("collinear", e.msg)
+    end
+    # a collinear set without the shock still loses one column, with a note
+    r = @test_logs (:warn, r"omitted, collinear") panellp(
+        @formula(leads(y) ~ x + w + xw2 + fe(id)), merge(b, (; xw2 = 3 .* b.w)); horizon = 0, kw...)
+    @test r.fits[1].status === :ok && count(r.fits[1].keep) == 2
+
+    # 2. a negative Mei–Sheng–Shi factor: the variance is NaN, not a clipped number;
+    #    psd = :raw keeps the authors' order of operations
+    keep = (b.id .<= 5) .| (b.t .<= 10)
+    rn = panellp(@formula(leads(y) ~ x + w + fe(id)), map(c -> c[keep], b); horizon = 54:55, kw...)
+    for psd in (:stata, :none)
+        cv = @test_logs (:warn, r"factor is negative at h = 54, 55.*NaN") vcov(
+            Clustered(:unit, :time; ssc = :mss, psd), rn)
+        @test all(i -> i.factor < 0, cv.info)
+        @test all(isnan, stderror(cv; term = "x"))
+    end
+    cr = @test_logs (:warn, r"factor is negative.*no meaning") vcov(
+        Clustered(:unit, :time; ssc = :mss, psd = :raw), rn)
+    @test all(isfinite, stderror(cr; term = "x"))
+
+    # 3. the absorbed-column screen under a loose tolerance: a rotating panel (120 periods,
+    #    each cohort of 3 units observed 4 periods) mixes slowly, and at tol = 1e-6 the
+    #    within transformation stops with an aggregate regressor not yet at round-off
+    rng = StableRNG(1)
+    id, t = Int[], Int[]
+    u = 0
+    for start in 1:117, k in 1:3
+        global u += 1
+        for s in 0:3
+            push!(id, u)
+            push!(t, start + s)
+        end
+    end
+    agg = randn(rng, 120)
+    x = randn(rng, length(id)) .+ 0.5 .* agg[t]
+    y = 0.7 .* x .+ randn(rng, length(id)) .+ agg[t]
+    p = (; id, t, y, x, X = agg[t])
+    for tol in (1e-12, 1e-6, 1e-5)
+        ab = AlternatingProjections(tol = tol)
+        # as the shock: absorbed by the time effects at every horizon
+        @test_throws ArgumentError panellp(@formula(y ~ X + x + fe(id) + fe(t)), p;
+            horizon = 0, shock = "X", absorb = ab, kw...)
+        # as a control: omitted
+        rc = panellp(@formula(y ~ x + X + fe(id) + fe(t)), p; horizon = 0, shock = "x",
+            absorb = ab, kw...)
+        @test rc.fits[1].absorbed == [false, true]
+        @test coef(rc, 0)[1] ≈ 0.7 atol = 0.1
+    end
+end
+
+@testitem "LP-DiD: switches hidden in gaps, first treatment, compat = :lpdid" tags = [:lpdid] begin
+    using StatsModels, LinearAlgebra
+    include(joinpath(@__DIR__, "support", "PLPDGPs.jl"))
+    using .PLPDGPs: read_csv
+    kw = (; id = :id, time = :t)
+    # dummy-variable OLS of y on x and period dummies
+    function tfe(y, x, t)
+        ts = sort!(unique(t))
+        X = hcat(x, [Float64(tt == s) for tt in t, s in ts])
+        return (pinv(X' * X) * (X' * y))[1]
+    end
+
+    # 1. the first-treatment estimator on the unbalanced panel, sample built by hand:
+    #    switches counted between consecutive observed treatment values
+    d = read_csv(joinpath(@__DIR__, "fixtures", "synthetic", "fx_lpdid_unbal.csv"))
+    val(v, k) = ismissing(v[k]) ? NaN : Float64(v[k])
+    row = Dict((i, t) => k for (k, (i, t)) in enumerate(zip(d.id, d.t)))
+    at(v, i, t) = (k = get(row, (i, t), 0); k == 0 ? NaN : val(v, k))
+    sw = Dict{Tuple{Int, Int}, Int}()         # switches of unit i up to its row at t
+    e0 = Dict{Int, Bool}()                    # untreated at its first row
+    for i in unique(d.id)
+        ts = sort!([t for (j, t) in keys(row) if j == i])
+        e0[i] = at(d.d2, i, ts[1]) == 0
+        last, n = NaN, 0
+        for t in ts
+            v = at(d.d2, i, t)
+            if !isnan(v)
+                (!isnan(last) && v != last) && (n += 1)
+                last = v
+            end
+            sw[(i, t)] = n
+        end
+    end
+    f = @formula(ldiff(y2) ~ firstdiff(d2) + fe(t))
+    est = LPDiD(nonabsorbing = true, firsttreat = true, control = :notyet)
+    r = panellp(f, d; horizon = 0:4, estimator = est, singletons = :keep, kw...)
+    rc = panellp(f, d; horizon = 0:4, singletons = :keep, kw...,
+        estimator = LPDiD(nonabsorbing = true, firsttreat = true, control = :notyet, compat = :lpdid))
+    for h in 0:4
+        ys, xs, tt = Float64[], Float64[], Int[]
+        for (i, t) in zip(d.id, d.t)
+            dy = at(d.y2, i, t + h) - at(d.y2, i, t - 1)
+            dd = at(d.d2, i, t) - at(d.d2, i, t - 1)
+            (isfinite(dy) && isfinite(dd) && haskey(row, (i, t + h))) || continue
+            sw[(i, t + h)] <= 1 || continue                    # first treatment spell
+            treated = dd == 1
+            control = dd == 0 && at(d.d2, i, t + h) == 0 && sw[(i, t + h)] == 0 && e0[i]
+            (treated || control) || continue
+            push!(ys, dy); push!(xs, dd); push!(tt, t)
+        end
+        @test nobs(r, h) == length(ys)
+        @test coef(r, h)[1] ≈ tfe(ys, xs, tt) rtol = 1e-10
+        # no row where the treatment switches off
+        @test all(k -> !r.fits[h + 1].esample[k] ||
+                       at(d.d2, d.id[k], d.t[k]) - at(d.d2, d.id[k], d.t[k] - 1) != -1,
+            eachindex(d.id))
+    end
+    # the command's rules keep such rows and miss hidden switches: another sample
+    @test nobspath(rc) != nobspath(r)
+    @test occursin("compat = :lpdid", sprint(show, MIME"text/plain"(), rc))
+    @test_throws ArgumentError LPDiD(compat = :stata) |> e -> panellp(f, d; horizon = 0, estimator = e, kw...)
+
+    # 2. a unit treated from its first row that switches off (no gaps, no missing values)
+    N, T = 9, 10
+    id = repeat(1:N; inner = T)
+    t = repeat(1:T; outer = N)
+    D = zeros(N * T)
+    for i in 1:N, s in 1:T
+        k = (i - 1) * T + s
+        D[k] = i <= 3 ? Float64(s >= 5) : i <= 7 ? 0.0 : Float64(s <= 3)   # units 8, 9 exit at 4
+    end
+    y = [0.1 * id[k] + 0.3 * t[k] + 2.0 * D[k] * (id[k] <= 3) for k in eachindex(id)]
+    p = (; id, t, y, D)
+    g = @formula(ldiff(y) ~ firstdiff(D) + fe(t))
+    for control in (:notyet, :nevertreated)
+        r1 = panellp(g, p; horizon = 0, kw...,
+            estimator = LPDiD(nonabsorbing = true, firsttreat = true, control = control))
+        @test coef(r1, 0)[1] ≈ 2.0 atol = 1e-10
+        r2 = panellp(g, p; horizon = 0, kw..., estimator = LPDiD(nonabsorbing = true,
+            firsttreat = true, control = control, compat = :lpdid))
+        @test nobs(r2, 0) == nobs(r1, 0) + 2          # the two switch-off rows
+        @test abs(coef(r2, 0)[1] - 2.0) > 0.5
+    end
+
+    # 3. a switch hidden in a gap: the unit is not a not-yet-treated control afterwards,
+    #    and an absorbing treatment that switches off inside a gap is refused
+    keep = [!(id[k] == 4 && t[k] == 5) for k in eachindex(id)]
+    D2 = copy(D)
+    for k in eachindex(id)
+        id[k] == 4 && t[k] >= 5 && (D2[k] = 1.0)       # unit 4 enters in its absent period
+    end
+    q = map(v -> v[keep], (; id, t, y, D = D2))
+    q = map(v -> v[q.id .<= 7], q)
+    ny = panellp(g, q; horizon = 0, kw...,
+        estimator = LPDiD(nonabsorbing = 2, control = :notyet))
+    @test !any(k -> ny.fits[1].esample[k] && q.id[k] == 4 && q.t[k] >= 6, eachindex(q.id))
+    nyc = panellp(g, q; horizon = 0, kw...,
+        estimator = LPDiD(nonabsorbing = 2, control = :notyet, compat = :lpdid))
+    @test any(k -> nyc.fits[1].esample[k] && q.id[k] == 4 && q.t[k] >= 6, eachindex(q.id))
+    D3 = [id[k] == 5 ? Float64(t[k] <= 4) : D[k] for k in eachindex(id)]     # unit 5 exits at 5
+    gapexit = [!(id[k] == 5 && t[k] == 5) for k in eachindex(id)]
+    z = map(v -> v[gapexit .& (id .<= 7)], (; id, t, y, D = D3))
+    e = try
+        panellp(g, z; horizon = 0, estimator = LPDiD(), kw...)
+    catch e
+        e
+    end
+    @test e isa ArgumentError && occursin("not absorbing", e.msg)
+    @test panellp(g, z; horizon = 0, estimator = LPDiD(compat = :lpdid), kw...) isa PanelLocalProjection
+
+    # 4. no horizon with treated rows and clean controls: an error that says so
+    e = try
+        panellp(g, map(v -> v[id .<= 3], p); horizon = 0, kw...,
+            estimator = LPDiD(control = :nevertreated))
+    catch e
+        e
+    end
+    @test e isa ArgumentError && occursin("LP-DiD", e.msg) && occursin("clean controls", e.msg)
+
+    # 5. a response with a lag inside is read at its own periods, not through the row of
+    #    t + h (as in every other estimator)
+    b = read_csv(joinpath(@__DIR__, "fixtures", "synthetic", "fx_lpdid.csv"))
+    drop = [b.id[k] == 1 && b.t[k] == 10 for k in eachindex(b.id)]     # unit 1 enters at 8
+    bb = map(v -> v[.!drop], b)
+    rl = panellp(@formula(ldiff(lags(y, 1)) ~ firstdiff(d) + fe(t)), bb; horizon = 2:2,
+        estimator = LPDiD(), kw...)
+    k8 = findfirst(k -> bb.id[k] == 1 && bb.t[k] == 8, eachindex(bb.id))
+    @test rl.fits[1].esample[k8]             # y at t + 1 and t − 2 exist; the row of t + 2 does not
+end
+
+@testitem "review of 2026-11-18: CD-OLS with a path term, shocks, first-stage variances" tags = [:core, :cdols, :lpiv, :api] begin
+    using StatsModels
+    include(joinpath(@__DIR__, "support", "PLPDGPs.jl"))
+    using .PLPDGPs: read_csv
+    FIX = joinpath(@__DIR__, "fixtures", "synthetic")
+    kw = (; id = :id, time = :t)
+
+    # the CD-OLS checks date every column of the design, also with a path term before the shock
+    c = read_csv(joinpath(FIX, "fx_unbalanced.csv"))
+    a = panellp(@formula(ldiff(y) ~ x + lags(x, 1) + leads(w)), c; horizon = 0:3,
+        estimator = CDOLS(), kw...)
+    b = panellp(@formula(ldiff(y) ~ leads(w) + x + lags(x, 1)), c; horizon = 0:3,
+        estimator = CDOLS(), shock = "x", kw...)
+    @test coefpath(a) ≈ coefpath(b)
+    # the path of the outcome itself is the outcome on the right-hand side after the base
+    e = try
+        panellp(@formula(ldiff(y) ~ x + lags(x, 1) + leads(y)), c; horizon = 2,
+            estimator = CDOLS(), kw...)
+    catch e
+        e
+    end
+    @test e isa ArgumentError && occursin("outcome enters the right-hand side", e.msg)
+
+    # a path column is a control: it is not the shock, by name or by default
+    for (f, k) in ((@formula(leads(y) ~ x + leads(x) + fe(id)), (; shock = "F1.x")),
+        (@formula(leads(y) ~ leads(x) + w + fe(id)), (;)))
+        for hz in (0:2, 1:2, -2:-1)
+            hz == -2:-1 && haskey(k, :shock) && continue       # no such column then
+            e = try
+                panellp(f, c; horizon = hz, k..., kw...)
+            catch e
+                e
+            end
+            @test e isa ArgumentError && occursin("path term", e.msg)
+        end
+    end
+
+    # first stage with the classical variance: with one endogenous regressor its F is the
+    # Cragg–Donald F
+    v = read_csv(joinpath(FIX, "fx_lpiv.csv"))
+    r = panellp(@formula(leads(y) ~ (s & ffr ~ s & mp) + w + fe(id) + fe(t)), v;
+        horizon = 0:1, kw...)
+    fs = firststage(r; vcov = Homoskedastic())
+    @test fs.kpF ≈ fs.cdF rtol = 1e-10
+    @test all(x -> isfinite(only(x)) && only(x) > 0, fs.se)
+    @test fs.cdF ≈ (only.(fs.coef) ./ only.(fs.se)) .^ 2 rtol = 1e-10
+    # clustered by unit, the scores of an aggregate instrument times a time-invariant
+    # exposure sum to zero within every unit of a balanced panel: undefined, not 1e33
+    rz = panellp(@formula(leads(y) ~ (s & ffr ~ s & mp) + fe(id) + fe(t)), v;
+        horizon = 0:1, kw...)
+    fu = @test_logs (:warn, r"firststage.*zero") firststage(rz; vcov = Clustered(:unit))
+    @test all(isnan, fu.kpF) && all(isnan, fu.effF) && all(isfinite, fu.cdF)
+    @test all(isfinite, firststage(rz; vcov = Robust()).kpF)
+    # with a unit-level control the unit sums are not zero, and the statistic is defined
+    @test all(isfinite, firststage(r; vcov = Clustered(:unit)).kpF)
+
+    # weighted fits store no synthetic series, and say so
+    w = panellp(@formula(leads(y) ~ s & X + fe(id) + fe(t)),
+        merge(read_csv(joinpath(FIX, "fx_tlahr.csv")), (;)); horizon = 0, kw...)
+    @test synthetic(w, 0) isa NamedTuple
+    lp = read_csv(joinpath(FIX, "fx_lpdid.csv"))
+    ww = panellp(@formula(leads(y) ~ x + fe(id) + fe(t)), lp; horizon = 0, weights = :w, kw...)
+    e = try
+        synthetic(ww, 0)
+    catch e
+        e
+    end
+    @test e isa ArgumentError && occursin("weighted", e.msg)
+end

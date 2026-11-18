@@ -109,6 +109,10 @@ function _build_design(f::StatsModels.FormulaTerm, data; id::Symbol, time::Symbo
     endoterms, instterms = iv === nothing ? (Any[], Any[]) : iv
     # a path term leads(x) is the leads 1, …, hmax of x; lead ℓ enters at horizons h ≥ ℓ
     ispath = [t isa LeadsTerm && t.leads === nothing for t in regs]
+    shock === nothing && isempty(endoterms) && !isempty(ispath) && ispath[1] &&
+        throw(ArgumentError(
+            "the first regressor is a path term, $(repr(regs[1])): it is a control, so it " *
+            "cannot be the default shock. Write the shock first, or name it with `shock = …`"))
     regs = Any[p ? LeadsTerm(t.term, 1:hmax) : t for (t, p) in zip(regs, ispath)]
     keepreg = [!(p && hmax < 1) for p in ispath]
     regs, ispath = regs[keepreg], ispath[keepreg]
@@ -165,6 +169,12 @@ function _build_design(f::StatsModels.FormulaTerm, data; id::Symbol, time::Symbo
                 _select_shocks(shock, coefnames, regs)
     any(j -> coefnames[j] == "(Intercept)", shockcols) &&
         throw(ArgumentError("the intercept cannot be the shock"))
+    for j in shockcols
+        leadorder[j] > 0 && throw(ArgumentError(
+            "the shock $(repr(coefnames[j])) is a lead of a path term, leads(x): those " *
+            "are controls, present only at the horizons that reach them. Name another " *
+            "shock, or write the lead with a range, leads(x, a:b)"))
+    end
 
     # rows where the regressors of every horizon are defined (the leads of a path term are
     # checked at the horizons that use them, `_leadmask!`)

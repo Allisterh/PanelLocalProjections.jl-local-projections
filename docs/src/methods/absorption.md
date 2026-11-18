@@ -47,8 +47,17 @@ The remaining columns are scaled to unit norm and factorised by a pivoted QR. Co
 beyond the numerical rank (``|R_{jj}| ≤ 10^{-9}|R_{11}|``) are omitted as collinear.
 Omitted regressors are reported once per call, with the horizons where they were omitted.
 
+With a tolerance looser than the default (`AlternatingProjections(tol = 1e-6)`) the within
+transformation can stop above that ratio on a slowly mixing panel. The columns that are
+mostly absorbed (a within share below 1e-2) are then transformed again at the default
+tolerance and screened on that, so an absorbed regressor is omitted whatever the `tol`.
+
 A *shock* that is absorbed or collinear in a horizon's sample makes that horizon
-`:singular`: its coefficients are `NaN`, and the horizons are reported. This happens, for
+`:singular`: its coefficients are `NaN`, and the horizons are reported. A shock is
+collinear when it lies in the span of the other regressors, whichever column of the
+collinear set the pivoting would omit: the outcome does not depend on the order of the
+formula. (The lags that `LagAugmented` adds are the exception: they give way to the
+formula's columns, so a shock collinear only through one of them stays identified.) This happens, for
 example, with a staggered treatment dummy whose later horizons only see untreated
 periods. When the shock is not identified at any horizon `panellp` throws an error, as
 for an aggregate shock with time effects.

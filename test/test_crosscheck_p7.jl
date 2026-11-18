@@ -12,8 +12,11 @@
 # - pmd(k | max): LPDiD(pmd = k | :max); nevertreated: control = :nevertreated;
 #   nonabsorbing(L, notyet firsttreat oneoff): nonabsorbing = L, control = :notyet,
 #   firsttreat = true, oneoff = true; untreated_before: untreated_before = true;
-# - rw: reweight = :lpdid (lpdid's count of the controls) without covariates, reweight =
-#   true with them (regression adjustment: Clustered(c; ssc = :none), normal bands);
+# - rw: reweight = true (with covariates it is regression adjustment:
+#   Clustered(c; ssc = :none), normal bands);
+# - every case runs with compat = :lpdid, the command's rules where they differ from the
+#   package's defaults (the controls counted by rw, switches hidden in gaps, switch-off
+#   rows under the first-treatment estimator): they differ on fx_lpdid_unbal only;
 # - aggregate_average: averageeffect(r; cluster); pretrend_test: pretrendtest(r; cluster).
 #
 # The general additions (crosscheck/stata/p7_general.do → p7_general.csv): reghdfe, ivreg2
@@ -101,7 +104,21 @@
         mine = [x for x in ref if x.ds == ds && x.case == case]
         # the hand-written regression has the post-treatment horizons only
         hs = case == "d_rw_hand" ? (0:8) : (-5:8)
+        # every lpdid case with the command's own rules (compat = :lpdid); the hand-written
+        # regression is the package's default
+        case == "d_rw_hand" ||
+            (est = LPDiD(est.control, est.nonabsorbing, est.firsttreat, est.oneoff,
+                est.untreated_before, est.reweight, est.pmd, :lpdid))
         r = panellp(f, data; id = :id, time = :t, horizon = hs, estimator = est, kw...)
+        # on the balanced panel, whose units all start untreated, the package's default
+        # rules are the command's
+        if ds == "fx_lpdid" && case != "d_rw_hand"
+            est0 = LPDiD(est.control, est.nonabsorbing, est.firsttreat, est.oneoff,
+                est.untreated_before, est.reweight, est.pmd, :none)
+            r0 = panellp(f, data; id = :id, time = :t, horizon = hs, estimator = est0, kw...)
+            @test nobspath(r0) == nobspath(r)
+            @test isequal(coefpath(r0), coefpath(r))
+        end
         s = summarize(r, spec(r, cl))
         for x in mine
             x.table == "event" || continue

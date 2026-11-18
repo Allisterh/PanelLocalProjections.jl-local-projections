@@ -185,7 +185,7 @@ CDOLS(; validate::Bool = true) = CDOLS(validate)
 
 """
     LPDiD(; control = :clean, nonabsorbing = nothing, firsttreat = false, oneoff = false,
-            untreated_before = false, reweight = false, pmd = nothing)
+            untreated_before = false, reweight = false, pmd = nothing, compat = :none)
 
 LP-DiD, the local-projections difference-in-differences estimator of Dube, Girardi, Jordà
 & Taylor (2025): at each horizon h the long difference y_{i,t+h} − y_{i,t−1} is regressed
@@ -207,13 +207,16 @@ Clean controls:
 - `nonabsorbing = L`: treatment can switch on and off, and its effects are assumed to
   stabilise within L periods (DGJT Section 4.2.3). Rows with ΔD_it ∈ {0, 1}, no switch in
   the L periods before t and none in t + 1, …, t + h (at h < 0: the same from t − |h| + 1
-  to t). `oneoff = true` is a treatment that lasts one period by construction (D_it = 1 is
+  to t). `nonabsorbing = 0` is 1: the rule needs ΔD at t − 1. `oneoff = true` is a treatment that lasts one period by construction (D_it = 1 is
   an event): events in place of switches.
 - `control = :nevertreated` keeps as controls only units never treated in the data;
   `control = :notyet` (non-absorbing) only units untreated from their first row through
   t + h.
 - `firsttreat = true` (non-absorbing) keeps a unit's rows up to its first treatment spell
-  (at most one switch, or one event, through t + h). With `control = :notyet` or
+  (at most one switch, or one event, through t + h).
+- Switches are counted between consecutive *observed* treatment values, so one hidden in
+  an absent period or behind a missing value is seen: a unit observed untreated and later
+  treated has switched, wherever the switch fell. With `control = :notyet` or
   `:nevertreated` it is the estimator of the effect of entering treatment for the first
   time (DGJT Section 4.2.2), which needs no stabilisation window: `nonabsorbing = true`.
 - `untreated_before = true` (non-absorbing) takes a unit as untreated before its first
@@ -227,12 +230,18 @@ Estimands and outcomes:
   controls, and the estimate is the mean over the treated rows of the outcome less its
   prediction. A regression-adjustment fit reports the treatment coefficient only, and its
   scores are its influence function: use `Clustered(:unit; ssc = :none)`.
-  `reweight = :lpdid` counts the controls of the weighted regression as `lpdid` 1.1.0 does
-  (also clean rows whose ΔD is undefined, which are not in the regression).
 - `pmd = k` or `:max`: the pre-mean-differenced version (Section 3.4), with the mean of
   y over t − k, …, t − 1 (all required), or over every earlier row of the unit, as the
-  base period instead of y_{i,t−1}. With a non-absorbing treatment the base window must
-  also be free of switches (events).
+  base period instead of y_{i,t−1}. With `nonabsorbing = L` the base must be clean as
+  well: no switch (event) in the k + L − 1 periods before t; `:max` is then k = L.
+
+`compat = :lpdid` reproduces the Stata command `lpdid` 1.1.0 where it departs from these
+rules (they agree on balanced panels without missing values whose units all start
+untreated): a period's controls in the weighted regression of `reweight` also count clean
+rows whose ΔD is undefined; switches are counted from the observed first differences only,
+so one hidden in a gap is not seen; and the first-treatment estimator keeps the rows where
+a unit treated from its first row switches off, with a regressor of −1.
+`reweight = :lpdid` is short for `reweight = true, compat = :lpdid`.
 
 See [`averageeffect`](@ref) and [`pretrendtest`](@ref).
 """
@@ -242,8 +251,9 @@ struct LPDiD <: PanelLPEstimator
     firsttreat::Bool
     oneoff::Bool
     untreated_before::Bool
-    reweight::Symbol                    # :none, :equal, :lpdid
+    reweight::Symbol                    # :none, :equal
     pmd::Int                            # 0: none; k; −1 for :max
+    compat::Symbol                      # :none, or :lpdid (the Stata command's rules)
 end
 
 # LPDiD resolved for one call (lpdid.jl): treatment histories over the data rows.
@@ -259,6 +269,7 @@ struct _DiD <: PanelLPEstimator
     C0::BitVector               # base flag of the non-absorbing rules
     y::Vector{Float64}          # outcome
     base::Vector{Float64}       # base period of the long difference
+    respok::BitVector           # the long difference is defined at every horizon
     common::Bool                # `sample = :common`: the same rows at every horizon
 end
 

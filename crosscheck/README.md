@@ -240,7 +240,10 @@ max(df_a − its levels, 1).
 `fx_lpdid` panels: `crosscheck/stata/p7_lpdid.do` → `test/fixtures/stata/p7_lpdid.csv`
 (1424 rows: 47 option sets × 2 panels, with the event-study, pooled, aggregate and
 pre-trend tables), compared in `test/test_crosscheck_p7.jl`. The formula is
-`ldiff(y) ~ firstdiff(d) + fe(t)` with `estimator = LPDiD(…)`, `horizon = -5:8`.
+`ldiff(y) ~ firstdiff(d) + fe(t)` with `estimator = LPDiD(…, compat = :lpdid)`,
+`horizon = -5:8`. `compat = :lpdid` selects the command's rules where the package's
+defaults differ (`docs/src/audit/lpdid.md`): it matters on `fx_lpdid_unbal` only; on
+`fx_lpdid` the test also checks that the defaults give the same numbers.
 
 | `lpdid y, unit(id) time(t) treat(d) pre_window(5) post_window(8) …` | `panellp` | `vcov` spec | Agreement |
 |---|---|---|---|
@@ -248,7 +251,7 @@ pre-trend tables), compared in `test/test_crosscheck_p7.jl`. The formula is
 | `ylags(2) controls(x)`, `dylags(2)`, `controls(x xb)`, `absorb(reg)` | `lags(y, 1:2) + x`, `lags(firstdiff(y), 1:2)`, `x + xb`, `fe(reg)` | `Clustered(:unit)` | as above |
 | `pmd(max)`, `pmd(3)`; `nevertreated`; `nocomp` | `LPDiD(pmd = :max \| 3)`; `control = :nevertreated`; `sample = :common` | as above | as above |
 | `pooled`, `post_pooled(2 6) pre_pooled(3 5)` | `pooled = true` with `horizon = 0:8 \| -5:-2`, `2:6 \| -5:-3` | as above | 1e-15 |
-| `rw` (also with weights, `nocomp`, `pmd(max) nevertreated`, `pooled`) | `LPDiD(reweight = :lpdid)` | as above | 5e-15 |
+| `rw` (also with weights, `nocomp`, `pmd(max) nevertreated`, `pooled`) | `LPDiD(reweight = true, compat = :lpdid)` | as above | 5e-15 |
 | a hand-written `reghdfe [pweight]` with the factor from the regression rows (`d_rw_hand`) | `LPDiD(reweight = true)` | as above | 4e-15 |
 | `rw` with `controls(x)`, `ylags(1)`, `dylags(2)`, `absorb(reg)`, `[pweight = w]`, `cluster(st)`, `pooled` (regression adjustment through `listreg`) | `LPDiD(reweight = true)` with the same terms | `Clustered(…; ssc = :none)`, normal bands | 2e-15 |
 | `nonabsorbing(5 \| 3)`, `(5, notyet)`, `(5, firsttreat)`, `(, firsttreat notyet)`, `(5, firsttreat notyet) pmd(2)`, with `nevertreated`, `untreated_before`, `pmd(2 \| max)`, `rw`, `nocomp`, `rw dylags(1)`; treatment `d2` | `LPDiD(nonabsorbing = L \| true, control = :notyet \| :nevertreated, firsttreat, untreated_before, …)` | `Clustered(:unit)` | 1e-14 |
@@ -259,9 +262,7 @@ pre-trend tables), compared in `test/test_crosscheck_p7.jl`. The formula is
 Row `pre{k}` of `e(results)` is h = −k and `tau{h}` is h. `pre1` is h = −1, which `lpdid`
 reports as (0, missing) and `panellp` as a zero coefficient with a zero standard error. A
 pre-treatment difference spanned by the lagged outcomes is zero by construction in both.
-`lpdid`'s `rw` counts the controls of a period differently from the regression's rows on
-unbalanced panels (`docs/src/audit/lpdid.md`): `reweight = :lpdid` reproduces it. The wild
-bootstrap is not compared (not implemented).
+The wild bootstrap is not compared (not implemented).
 
 **General additions**: `crosscheck/stata/p7_general.do` → `p7_general.csv` (112 rows).
 

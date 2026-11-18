@@ -55,7 +55,7 @@ estimator). Both identities are tests of the package.
 |---|---|---|
 | default (absorbing treatment) | ``\Delta D_{it} = 1``, or ``D_{i,t+h} = 0`` (``D_{it} = 0`` at ``h < 0``) | default |
 | `control = :nevertreated` | controls only from units never treated in the data | `nevertreated` |
-| `nonabsorbing = L` | ``\Delta D_{it} \in \{0, 1\}``, no switch in ``t-L, \dots, t-1`` nor in ``t+1, \dots, t+h``; at ``h < 0`` the same at ``t, t-1, \dots, t-\lvert h\rvert+1`` | `nonabsorbing(L)` |
+| `nonabsorbing = L` | ``\Delta D_{it} \in \{0, 1\}``, no switch in ``t-L, \dots, t-1`` nor in ``t+1, \dots, t+h``; at ``h < 0`` the same at ``t, t-1, \dots, t-\lvert h\rvert+1``. `nonabsorbing = 0` is 1 (the rule needs ``\Delta D_{i,t-1}``) | `nonabsorbing(L)` |
 | `nonabsorbing = L, oneoff = true` | the same with events (``D = 1``) in place of switches | `nonabsorbing(L, oneoff)` |
 | `nonabsorbing = L, control = :notyet` | controls only from units untreated from their first row through ``t + h`` | `nonabsorbing(L, notyet)` |
 | `nonabsorbing = L, firsttreat = true` | rows with at most one switch (event) through ``t + h`` | `nonabsorbing(L, firsttreat)` |
@@ -64,8 +64,14 @@ estimator). Both identities are tests of the package.
 
 - A condition on a value that is not observed (a missing treatment, an absent period) is
   false: the row is left out.
-- With the default rule a treatment that ever switches off is an error, pointing to
-  `nonabsorbing`. (`lpdid` runs, with a regressor of −1 on those rows.)
+- Switches are counted between consecutive *observed* treatment values. A unit observed
+  untreated and later treated has switched, also when the switch fell in an absent period
+  or behind a missing value: it is no longer a not-yet-treated control, and a later
+  switch is not its first.
+- A control is a row with ``\Delta D_{it} = 0``: a row where the treatment switches off is
+  neither treated nor a control, under every rule.
+- With the default rule a treatment that ever switches off, in a gap too, is an error
+  pointing to `nonabsorbing`. (`lpdid` runs, with a regressor of −1 on those rows.)
 - With a non-absorbing treatment (DGJT Section 4.2) the estimand is the effect of a
   treatment event under the assumption that effects stabilise within ``L`` periods; with
   `firsttreat` and not-yet- or never-treated controls it is the effect of entering
@@ -101,15 +107,17 @@ included.
   levels to be connected to the controls', as any two-way prediction does.
 - The time effects may be group × time effects, `fe(region) & fe(t)` (comparisons within a
   region and period); `reweight = true` is then regression adjustment as well.
-- `reweight = :lpdid` is a compatibility switch for the weighted regression: see the
-  [audit page](../audit/lpdid.md).
+- `compat = :lpdid` applies the command's own rules where they differ from the ones on
+  this page; see [Reproducing `lpdid`](@ref) below.
 
 ## Base period, pooled estimates, averages
 
 - `pmd = k` (pre-mean differencing, Section 3.4) replaces the base ``y_{i,t-1}`` by the
   mean of ``y`` over ``t-k, \dots, t-1`` (all required); `pmd = :max` by the mean over
-  every earlier row of the unit. With a non-absorbing treatment the base window must also
-  be free of switches, and `:max` means ``k = L``. With `pmd`, ``h = -1`` is estimated like
+  every earlier row of the unit. With `nonabsorbing = L` the base must be clean as well:
+  no switch (event) in the ``k + L - 1`` periods before ``t``, so that the outcomes in the
+  base window are themselves ``L`` periods away from a switch; `:max` then means
+  ``k = L``. With `pmd`, ``h = -1`` is estimated like
   any other horizon (`lpdid` reports it as zero).
 - `pooled = true` gives the pooled estimate (Section 3.5): one regression of the outcome
   averaged over the horizons, less the base, on the rows where the whole window is
@@ -135,6 +143,21 @@ factor and t(G − 1) critical values, is `lpdid`'s output. Any other specificat
 to the weighted-regression and direct-inclusion fits. The wild bootstrap of `lpdid` is not
 implemented.
 
+## Reproducing `lpdid`
+
+On a balanced panel without missing values whose units all start untreated, the rules
+above are the command's. Otherwise they differ in three places, and `compat = :lpdid`
+switches to the command's:
+
+| | `LPDiD(...)` | `compat = :lpdid` (`lpdid` 1.1.0) |
+|---|---|---|
+| controls of a period in the weighted regression of `reweight` | the rows of the regression | also clean rows whose ``\Delta D`` is undefined, which the regression drops |
+| switches, for `control = :notyet`, `firsttreat` and the check of an absorbing treatment | changes between consecutive observed values | the observed first differences: a switch in a gap is not seen |
+| first treatment with not-yet- or never-treated controls | rows where the treatment switches off are left out | kept, with a regressor of −1, for a unit treated from its first row |
+
+`reweight = :lpdid` (from 0.2.1) is short for `reweight = true, compat = :lpdid`. The
+[audit page](../audit/lpdid.md) has the details and the size of the differences.
+
 ## Map from `lpdid`
 
 | `lpdid` | `panellp` |
@@ -144,6 +167,7 @@ implemented.
 | `[pweight = w]`, `weights(w)` | `weights = :w` |
 | `cluster(c)` | `Clustered(c)` (declare `clusters = (c,)` for a column that is not a fixed effect) |
 | `rw` | `LPDiD(reweight = true)` |
+| the command's numbers on unbalanced panels | `LPDiD(…, compat = :lpdid)` |
 | `pmd(k)`, `pmd(max)` | `LPDiD(pmd = k)`, `LPDiD(pmd = :max)` |
 | `nocomp` | `sample = :common` |
 | `pooled`, `post_pooled(a b)`, `pre_pooled(a b)` | `pooled = true` with `horizon = a:b`, `horizon = -b:-a` |
