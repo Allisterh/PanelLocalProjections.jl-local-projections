@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 (2026-11-19): review follow-ups
 
 ### LP-DiD: non-absorbing rules (**estimates change** on panels with gaps, missing treatment values, or units treated from their first row)
 - Switches are counted between consecutive observed treatment values. They were summed

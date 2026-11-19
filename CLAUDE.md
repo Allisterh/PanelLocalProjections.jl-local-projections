@@ -11,7 +11,7 @@ PanelLocalProjections.jl estimates panel local projections: for each horizon h i
 - **Dube–Girardi–Jordà–Taylor (2025, *JAE*):** **LP-DiD**, difference-in-differences by local projections on clean-control samples. Their Stata command is `lpdid` (GPL-3).
 - **Almuzara–Sancibrián (2026):** **t-LAHR** inference. It is time-clustered, lag-augmented and heteroskedasticity-robust, with an HC2 + Imbens–Kolesár df refinement. `starting_idea.md` calls it a "HAR estimator", but it is **not** HAR: Driscoll–Kraay, EWC and unit/two-way clustering are its *comparators*.
 
-The phased roadmap, with exit criteria per phase, is in `TODO.md`. Panel LP-IV is v0.2.0 (Phase 6: 6a IV core 19bf450, 6b lag-augmented IV 91564d3, 6c first-stage diagnostics, a public-data example and the release; design in `docs/notes/design/lpiv_design.md`). LP-DiD, negative horizons, lead paths, weights and pooled fits are v0.2.1 (Phase 7).
+The phased roadmap, with exit criteria per phase, is in `TODO.md`. Panel LP-IV is v0.2.0 (Phase 6: 6a IV core 19bf450, 6b lag-augmented IV 91564d3, 6c first-stage diagnostics, a public-data example and the release; design in `docs/notes/design/lpiv_design.md`). LP-DiD, negative horizons, lead paths, weights and pooled fits are v0.2.1 (Phase 7); the review follow-ups (LP-DiD `compat = :lpdid`, collinear shocks, first-stage fixes) are v0.2.2.
 
 ## Hard rules
 

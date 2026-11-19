@@ -265,13 +265,13 @@ BSD-3 code, CC BY 4.0 data, local only).
 - [x] A NaN (or `nothing`) id was a unit; −0.0 and 0.0 were two levels; `maxiter` was
   exceeded by one sweep; stale documentation
 - [x] The three judgment calls, left as they were in 0.2.1 and changed afterwards (see the
-  CHANGELOG, Unreleased): a shock in a collinear set is `:singular` whatever the formula's
+  CHANGELOG, 0.2.2): a shock in a collinear set is `:singular` whatever the formula's
   order (`_shockspanned`); `ssc = :mss` with a negative factor gives a NaN variance
   (clipped only with `psd = :raw`); the absorbed-column screen re-absorbs nearly absorbed
   columns at the default tolerance when `tol` is looser (`_recheck_absorbed!`)
 - [x] The fourth lens (black-box use and documentation) ran on 2026-11-18 (fuzzing against
   dummy-variable oracles, invariances, every docs code block, about 150 error-path probes):
-  eight findings, fixed (see the CHANGELOG, Unreleased). The two that matter are in LP-DiD's
+  eight findings, fixed (see the CHANGELOG, 0.2.2). The two that matter are in LP-DiD's
   non-absorbing rules and were inherited from `lpdid`: switches hidden in gaps, and
   switch-off rows under the first-treatment estimator; the command's behaviour is now
   `compat = :lpdid`
