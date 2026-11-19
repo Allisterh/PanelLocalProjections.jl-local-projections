@@ -18,7 +18,7 @@ procedures of the recent panel-LP literature in one place:
 | LP-DiD: difference-in-differences by local projections on clean-control samples, for absorbing, non-absorbing and one-off treatments, with reweighting, regression adjustment, pre-mean differencing, pooled estimates and a pre-trend test | Dube, Girardi, Jordà & Taylor (2025, *JAE*) |
 | Pre-trends (negative horizons) and the response holding the later path of the treatment fixed, for a continuous, instrumented treatment | Ilzetzki (2024, *AER*) |
 
-Version 0.2.1, for Julia 1.10 (LTS) and later. What comes after it (joint bands across
+Version 0.2.2, for Julia 1.10 (LTS) and later. What comes after it (joint bands across
 horizons, weak-IV-robust inference) is listed in [`TODO.md`](TODO.md);
 the changes of each version are in [`CHANGELOG.md`](CHANGELOG.md). The
 [documentation](#documentation) covers the methods, the conventions of each reference
@@ -32,7 +32,7 @@ The package is not in the General registry. Install it from GitHub:
 ```julia
 using Pkg
 Pkg.add(url = "https://github.com/andrerecio/PanelLocalProjections.jl")                   # main
-Pkg.add(url = "https://github.com/andrerecio/PanelLocalProjections.jl", rev = "v0.2.1")   # or a tagged release
+Pkg.add(url = "https://github.com/andrerecio/PanelLocalProjections.jl", rev = "v0.2.2")   # or a tagged release
 ```
 
 It depends on StatsModels, Tables, StatsAPI, StatsFuns, RecipesBase and Julia's standard
